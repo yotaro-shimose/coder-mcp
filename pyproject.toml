@@ -1,0 +1,19 @@
+[build-system]
+requires = ["maturin>=1.11,<2.0", "cffi"]
+build-backend = "maturin"
+
+[project]
+name = "coder-mcp"
+requires-python = ">=3.11"
+classifiers = [
+    "Programming Language :: Rust",
+    "Programming Language :: Python :: Implementation :: CPython",
+    "Programming Language :: Python :: Implementation :: PyPy",
+]
+dependencies = ["cffi"]
+dynamic = ["version"]
+
+
+[tool.maturin]
+python-source = "python"
+module-name = "coder_mcp.coder_mcp"
