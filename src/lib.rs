@@ -4,7 +4,7 @@ pub mod runtime;
 pub mod server;
 
 use pyo3::prelude::*;
-
+use pyo3_stub_gen::derive::gen_stub_pyfunction;
 /// Starts the coder-mcp server with the specified workspace directory and port.
 ///
 /// Args:
