@@ -1,0 +1,11 @@
+target/
+.git/
+.venv/
+__pycache__/
+*.pyc
+*.pyo
+*.pyd
+.db/
+bash_events/
+uv.lock
+python/.venv/
