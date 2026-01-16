@@ -10,7 +10,10 @@ classifiers = [
     "Programming Language :: Python :: Implementation :: CPython",
     "Programming Language :: Python :: Implementation :: PyPy",
 ]
-dependencies = ["cffi"]
+dependencies = [
+    "cffi",
+    "openai-agents>=0.6.6",
+]
 dynamic = ["version"]
 
 

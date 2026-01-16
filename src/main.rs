@@ -13,5 +13,15 @@ async fn main() {
         .unwrap_or_else(|_| cwd.join("workspace"));
 
     let port = 3000;
-    run_server(workspace_path, port).await;
+
+    // Create shutdown channel
+    let (tx, rx) = tokio::sync::oneshot::channel();
+
+    // Spawn task to listen for Ctrl+C
+    tokio::spawn(async move {
+        tokio::signal::ctrl_c().await.unwrap();
+        let _ = tx.send(());
+    });
+
+    run_server(workspace_path, port, rx).await;
 }

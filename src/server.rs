@@ -9,7 +9,11 @@ use rmcp::transport::{
 use std::path::PathBuf;
 use tokio::net::TcpListener;
 
-pub async fn run_server(workspace_path: PathBuf, port: u16) {
+pub async fn run_server(
+    workspace_path: PathBuf,
+    port: u16,
+    shutdown_rx: tokio::sync::oneshot::Receiver<()>,
+) {
     // Set up tracing using the local logger
     logger::init_logging();
 
@@ -46,5 +50,11 @@ pub async fn run_server(workspace_path: PathBuf, port: u16) {
     let addr = format!("0.0.0.0:{}", port);
     let listener = TcpListener::bind(&addr).await.unwrap();
     tracing::info!("Listening on {}", listener.local_addr().unwrap());
-    axum::serve(listener, app).await.unwrap();
+    axum::serve(listener, app)
+        .with_graceful_shutdown(async {
+            shutdown_rx.await.ok();
+            tracing::info!("Server shutting down");
+        })
+        .await
+        .unwrap();
 }

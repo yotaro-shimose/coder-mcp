@@ -1,3 +1,3 @@
-from .coder_mcp import start_server
+from .coder_mcp import CServer
 
-__all__ = ["start_server"]
+__all__ = ["CServer"]

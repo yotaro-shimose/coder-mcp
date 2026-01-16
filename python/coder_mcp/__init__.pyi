@@ -1,9 +1,4 @@
-def start_server(workspace: str, port: int) -> None:
-    """
-    Starts the coder-mcp server.
-
-    Args:
-        workspace (str): The path to the workspace directory.
-        port (int): The port number to listen on.
-    """
-    ...
+class CServer:
+    def __init__(self) -> None: ...
+    async def start(self, workspace: str, port: int) -> None: ...
+    async def stop(self) -> None: ...
