@@ -1,9 +1,7 @@
 import asyncio
-import time
 import uuid
 from pathlib import Path
 from typing import Dict, List, Optional, Self, override
-from urllib.request import urlopen
 
 from agents.mcp import MCPServerStreamableHttp
 
@@ -218,35 +216,18 @@ class DockerRuntime(Runtime):
 
     async def _wait_for_health(self, timeout: float = 30.0):
         """Wait for the server to respond to health checks."""
-        print("⏳ Waiting for server to become healthy...")
-        start_time = time.time()
         health_url = f"http://localhost:{self.host_port}/health"
-
-        while time.time() - start_time < timeout:
-            try:
-                # We use a synchronous check in a thread or just a simple async fetch
-                # For simplicity, using loop.run_in_executor with urlopen
-                loop = asyncio.get_running_loop()
-
-                def check():
-                    with urlopen(health_url, timeout=1) as response:
-                        return response.getcode() == 200
-
-                if await loop.run_in_executor(None, check):
-                    print("✅ Server is healthy!")
-                    return
-            except Exception:
-                pass
-            await asyncio.sleep(1)
-
-        # If we get here, it timed out. Try to get logs for debugging.
-        proc = await asyncio.create_subprocess_exec(
-            "docker",
-            "logs",
-            self.container_name,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
-        )
-        stdout, _ = await proc.communicate()
-        print(f"❌ Server failed to become healthy. Logs:\n{stdout.decode()}")
-        raise RuntimeError("Server failed to become healthy in time.")
+        try:
+            await super()._wait_for_health(health_url, timeout)
+        except RuntimeError as e:
+            # If it timed out, try to get logs for debugging.
+            proc = await asyncio.create_subprocess_exec(
+                "docker",
+                "logs",
+                self.container_name,
+                stdout=asyncio.subprocess.PIPE,
+                stderr=asyncio.subprocess.PIPE,
+            )
+            stdout, _ = await proc.communicate()
+            print(f"❌ Server failed to become healthy. Logs:\n{stdout.decode()}")
+            raise e

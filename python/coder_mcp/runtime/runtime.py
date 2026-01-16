@@ -3,6 +3,9 @@
 Provides base class and implementations for different execution environments.
 """
 
+import asyncio
+import time
+from urllib.request import urlopen
 from typing import Self
 from abc import ABC, abstractmethod
 from typing import Any
@@ -28,7 +31,28 @@ class Runtime(ABC):
         pass
 
     @abstractmethod
-    @abstractmethod
     def coder_mcp(self) -> MCPServerStreamableHttp: ...
     @abstractmethod
     def coder_mcp_readonly(self) -> MCPServerStreamableHttp: ...
+
+    async def _wait_for_health(self, url: str, timeout: float = 30.0):
+        """Wait for the server to respond to health checks at the given URL."""
+        print(f"⏳ Waiting for server at {url} to become healthy...")
+        start_time = time.time()
+
+        while time.time() - start_time < timeout:
+            try:
+                loop = asyncio.get_running_loop()
+
+                def check():
+                    with urlopen(url, timeout=1) as response:
+                        return response.getcode() == 200
+
+                if await loop.run_in_executor(None, check):
+                    print("✅ Server is healthy!")
+                    return
+            except Exception:
+                pass
+            await asyncio.sleep(1)
+
+        raise RuntimeError(f"Server at {url} failed to become healthy in {timeout}s.")

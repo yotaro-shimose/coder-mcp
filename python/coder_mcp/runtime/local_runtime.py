@@ -52,6 +52,7 @@ class LocalRuntime(Runtime):
         self.url = f"http://localhost:{self.port}/mcp"
         self._server = CServer()
         await self._server.start(self.workdir, self.port)
+        await self._wait_for_health(f"http://localhost:{self.port}/health")
         return self
 
     @override

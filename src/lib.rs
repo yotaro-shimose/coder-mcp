@@ -39,9 +39,6 @@ impl CServer {
             let (tx, rx) = oneshot::channel();
             *shutdown_tx.lock().unwrap() = Some(tx);
 
-            // Create a new runtime for the server or rely on pyo3-asyncio's initialized runtime
-            // Usually pyo3-asyncio expects a runtime to be running.
-            // We spawn the server task.
             let handle = tokio::spawn(async move {
                 server::run_server(workspace_path, port, rx).await;
             });
