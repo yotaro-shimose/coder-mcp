@@ -1,5 +1,5 @@
-use rmcp::model::ErrorCode;
 use rmcp::ErrorData as McpError;
+use rmcp::model::ErrorCode;
 use std::collections::HashMap;
 use std::fs;
 use std::path::{Path, PathBuf};
@@ -130,7 +130,13 @@ pub async fn run_list_directory(
                     if entry.path().is_dir() {
                         formatted_paths.push(format!("{}/", name));
                     } else {
-                        formatted_paths.push(name);
+                        let line_count_str = if let Ok(content) = fs::read_to_string(entry.path()) {
+                            let count = content.lines().count();
+                            format!(" ({} line{})", count, if count == 1 { "" } else { "s" })
+                        } else {
+                            "".to_string()
+                        };
+                        formatted_paths.push(format!("{}{}", name, line_count_str));
                     }
                 }
             }
@@ -305,7 +311,7 @@ pub async fn run_insert_lines(
                 "Error: Failed to read file {}: {}",
                 path.display(),
                 e
-            ))
+            ));
         }
     };
 
@@ -1063,5 +1069,24 @@ mod tests {
         let output = result.unwrap();
         assert!(output.contains("Error"));
         assert!(output.contains("not a directory"));
+    }
+
+    #[tokio::test]
+    async fn test_list_directory_with_line_counts() {
+        let dir = tempdir().unwrap();
+        fs::write(dir.path().join("file1.txt"), "line1\nline2\nline3").unwrap();
+        fs::write(dir.path().join("file2.txt"), "hello").unwrap();
+        fs::create_dir(dir.path().join("subdir")).unwrap();
+
+        let args = ListDirectoryArgs {
+            path: ".".to_string(),
+        };
+
+        let result = run_list_directory(&args, dir.path()).await;
+        assert!(result.is_ok());
+        let output = result.unwrap();
+        assert!(output.contains("file1.txt (3 lines)"));
+        assert!(output.contains("file2.txt (1 line)"));
+        assert!(output.contains("subdir/"));
     }
 }
