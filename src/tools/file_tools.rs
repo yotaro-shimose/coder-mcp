@@ -5,6 +5,8 @@ use std::fs;
 use std::path::{Path, PathBuf};
 use tokio::sync::Mutex;
 
+use crate::tools::utils;
+
 // Re-export argument types from service
 pub use crate::service::{
     CreateFileArgs, DeleteFileArgs, InsertLinesArgs, ListDirectoryArgs, StrReplaceArgs,
@@ -13,19 +15,8 @@ pub use crate::service::{
 
 const SNIPPET_CONTEXT_WINDOW: usize = 4;
 
-fn make_output(snippet_content: &str, snippet_description: &str, start_line: usize) -> String {
-    let lines: Vec<&str> = snippet_content.lines().collect();
-    let numbered_lines: Vec<String> = lines
-        .iter()
-        .enumerate()
-        .map(|(i, line)| format!("{:6}\t{}", i + start_line, line))
-        .collect();
-
-    format!(
-        "Here's the result of running `cat -n` on {}:\n{}\n",
-        snippet_description,
-        numbered_lines.join("\n")
-    )
+fn make_output(snippet_content: &str, _snippet_description: &str, start_line: usize) -> String {
+    utils::make_numbered_output(snippet_content, start_line)
 }
 
 pub async fn run_view_file(args: &ViewFileArgs, workspace_dir: &Path) -> Result<String, McpError> {
@@ -141,11 +132,7 @@ pub async fn run_list_directory(
                 }
             }
             formatted_paths.sort();
-            Ok(format!(
-                "Here's the files and directories in {}, excluding hidden items:\n{}",
-                path.display(),
-                formatted_paths.join("\n")
-            ))
+            Ok(formatted_paths.join("\n"))
         }
         Err(e) => Ok(format!(
             "Error: Failed to list directory {}: {}",
@@ -1020,7 +1007,7 @@ mod tests {
         let result = run_list_directory(&args, dir.path()).await;
         assert!(result.is_ok());
         let output = result.unwrap();
-        assert!(output.contains("excluding hidden items"));
+        assert!(output.is_empty());
     }
 
     #[tokio::test]

@@ -1,3 +1,4 @@
+import asyncio
 import shutil
 import subprocess
 import tempfile
@@ -26,7 +27,7 @@ class TempWorkspace:
         self.copy_method = copy_method
         self.temp_dir: Optional[Path] = None
 
-    def __enter__(self) -> Path:
+    def _setup(self) -> Path:
         # 1. Create Temp Directory
         self.temp_dir = Path(tempfile.mkdtemp(prefix=self.prefix))
 
@@ -110,6 +111,19 @@ class TempWorkspace:
 
         return self.temp_dir
 
-    def __exit__(self, exc_type, exc_val, exc_tb):
+    def _cleanup(self):
         if self.temp_dir and self.temp_dir.exists():
             shutil.rmtree(self.temp_dir)
+
+    def __enter__(self) -> Path:
+        return self._setup()
+
+    def __exit__(self, exc_type, exc_val, exc_tb):
+        self._cleanup()
+
+    async def __aenter__(self) -> Path:
+        return await asyncio.to_thread(self._setup)
+
+    async def __aexit__(self, exc_type, exc_val, exc_tb):
+        await asyncio.to_thread(self._cleanup)
+
