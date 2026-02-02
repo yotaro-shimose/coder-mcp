@@ -1,3 +1,4 @@
+import logging
 import asyncio
 import uuid
 from pathlib import Path
@@ -7,6 +8,9 @@ from agents.mcp import MCPServerStreamableHttp
 
 from coder_mcp.runtime import Runtime
 from coder_mcp.utils import chmod_recursive
+
+
+logger = logging.getLogger(__name__)
 
 
 class DockerRuntime(Runtime):
@@ -117,17 +121,19 @@ class DockerRuntime(Runtime):
         cmd.append(self.image_name)
 
         # 3. Start container
-        print(f"🐳 Running: {' '.join(cmd)}")
+        logger.debug(f"🐳 Running: {' '.join(cmd)}")
         proc = await asyncio.create_subprocess_exec(
             *cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE
         )
         stdout, stderr = await proc.communicate()
         if proc.returncode != 0:
-            print(f"❌ Container creation failed: {stderr.decode()}")
+            logger.error(f"❌ Container creation failed: {stderr.decode()}")
             raise RuntimeError(f"Failed to start Docker container: {stderr.decode()}")
 
         self._container_id = stdout.decode().strip()
-        print(f"✅ Container created successfully (ID: {self._container_id[:12]})")
+        logger.debug(
+            f"✅ Container created successfully (ID: {self._container_id[:12]})"
+        )
 
         # If host_port was not specified, find what Docker assigned
         if not self.host_port:
@@ -161,7 +167,7 @@ class DockerRuntime(Runtime):
                     f"Port output: {port_output}"
                 )
 
-        print(
+        logger.debug(
             f"🚀 Started Docker container '{self.container_name}' on port {self.host_port}."
         )
 
@@ -172,7 +178,7 @@ class DockerRuntime(Runtime):
     @override
     async def __aexit__(self, exc_type, exc_val, exc_tb):
         if self._container_id:
-            print(
+            logger.debug(
                 f"🛑 Stopping and removing Docker container '{self.container_name}'..."
             )
             proc = await asyncio.create_subprocess_exec(
@@ -184,7 +190,7 @@ class DockerRuntime(Runtime):
             )
             await proc.communicate()
             self._container_id = None
-            print("👋 Container stopped.")
+            logger.debug("👋 Container stopped.")
 
     @override
     def coder_mcp(self) -> MCPServerStreamableHttp:
@@ -229,5 +235,7 @@ class DockerRuntime(Runtime):
                 stderr=asyncio.subprocess.PIPE,
             )
             stdout, _ = await proc.communicate()
-            print(f"❌ Server failed to become healthy. Logs:\n{stdout.decode()}")
+            logger.error(
+                f"❌ Server failed to become healthy. Logs:\n{stdout.decode()}"
+            )
             raise e

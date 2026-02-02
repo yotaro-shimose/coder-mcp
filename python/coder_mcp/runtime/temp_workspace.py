@@ -1,9 +1,13 @@
+import logging
 import asyncio
 import shutil
 import subprocess
 import tempfile
 from pathlib import Path
 from typing import Dict, Optional
+
+
+logger = logging.getLogger(__name__)
 
 
 class TempWorkspace:
@@ -43,7 +47,7 @@ class TempWorkspace:
                     )
                 except subprocess.CalledProcessError as e:
                     # Fallback to copy if clone fails (e.g. not a git repo)
-                    print(f"Git clone failed: {e}. Falling back to copy.")
+                    logger.warning(f"Git clone failed: {e}. Falling back to copy.")
                     if self.temp_dir.exists():
                         shutil.rmtree(self.temp_dir)
                     self.temp_dir.mkdir()
@@ -126,4 +130,3 @@ class TempWorkspace:
 
     async def __aexit__(self, exc_type, exc_val, exc_tb):
         await asyncio.to_thread(self._cleanup)
-

@@ -3,6 +3,7 @@
 Provides base class and implementations for different execution environments.
 """
 
+import logging
 import asyncio
 import time
 from urllib.request import urlopen
@@ -11,6 +12,9 @@ from abc import ABC, abstractmethod
 from typing import Any
 
 from agents.mcp import MCPServerStreamableHttp
+
+
+logger = logging.getLogger(__name__)
 
 
 class Runtime(ABC):
@@ -37,7 +41,7 @@ class Runtime(ABC):
 
     async def _wait_for_health(self, url: str, timeout: float = 30.0):
         """Wait for the server to respond to health checks at the given URL."""
-        print(f"⏳ Waiting for server at {url} to become healthy...")
+        logger.debug(f"⏳ Waiting for server at {url} to become healthy...")
         start_time = time.time()
 
         while time.time() - start_time < timeout:
@@ -49,7 +53,7 @@ class Runtime(ABC):
                         return response.getcode() == 200
 
                 if await loop.run_in_executor(None, check):
-                    print("✅ Server is healthy!")
+                    logger.debug("✅ Server is healthy!")
                     return
             except Exception:
                 pass

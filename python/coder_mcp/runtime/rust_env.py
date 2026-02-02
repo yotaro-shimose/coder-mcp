@@ -1,7 +1,11 @@
+import logging
 from typing import Self
 from pathlib import Path
 from typing import Dict, Optional, List
 from coder_mcp.runtime.docker_runtime import DockerRuntime
+
+
+logger = logging.getLogger(__name__)
 
 
 class RustCodingEnvironment(DockerRuntime):
@@ -53,7 +57,7 @@ class RustCodingEnvironment(DockerRuntime):
 
     async def __aenter__(self) -> Self:
         """Starts the Rust coding environment."""
-        print("🦀 Initializing Rust Coding Environment...")
+        logger.debug("🦀 Initializing Rust Coding Environment...")
 
         # Ensure cache directories exist with proper permissions
         # The Docker container runs as non-root user, so we need 777 permissions
