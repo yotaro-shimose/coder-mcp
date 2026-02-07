@@ -7,6 +7,7 @@ from agents.mcp import MCPServerStreamableHttp
 
 from coder_mcp import CServer
 from coder_mcp.runtime.runtime import Runtime
+from coder_mcp.types import CoderToolName
 
 
 class LocalRuntime(Runtime):
@@ -62,21 +63,33 @@ class LocalRuntime(Runtime):
             await self._server.stop()
 
     @override
-    def coder_mcp(self) -> MCPServerStreamableHttp:
+    def coder_mcp(
+        self,
+        allowed_tool_names: list[CoderToolName] | None = None,
+        blocked_tool_names: list[CoderToolName] | None = None,
+    ) -> MCPServerStreamableHttp:
+        tool_filter = {}
+        if allowed_tool_names:
+            tool_filter["allowed_tool_names"] = allowed_tool_names
+        if blocked_tool_names:
+            tool_filter["blocked_tool_names"] = blocked_tool_names
+
         return MCPServerStreamableHttp(
             name="Local MCP Server",
             params={
                 "url": self.url,
             },
+            tool_filter=tool_filter,  # type: ignore
             cache_tools_list=False,
         )
 
     @override
     def coder_mcp_readonly(self) -> MCPServerStreamableHttp:
-        return MCPServerStreamableHttp(
-            name="Local MCP Server (ReadOnly)",
-            params={
-                "url": self.url.replace("/mcp", "/mcp-readonly"),
-            },
-            cache_tools_list=False,
+        return self.coder_mcp(
+            allowed_tool_names=[
+                "view_file",
+                "list_directory",
+                "search_filenames",
+                "search_content",
+            ]
         )

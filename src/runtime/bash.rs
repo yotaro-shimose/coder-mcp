@@ -1,7 +1,7 @@
 use crate::models::{BashCommand, BashEvent, BashEventPage, BashOutput, ExecuteBashRequest};
 use crate::runtime::terminal::TerminalSession;
 use chrono::Utc;
-use glob::glob;
+use rusqlite::{params, Connection};
 use std::fs;
 use std::path::PathBuf;
 use std::sync::{Arc, Mutex};
@@ -9,48 +9,66 @@ use uuid::Uuid;
 
 #[derive(Clone)]
 pub struct BashEventService {
-    pub bash_events_dir: PathBuf,
+    pub db: Arc<Mutex<Connection>>,
     pub terminal_session: Arc<Mutex<TerminalSession>>,
 }
 
 impl BashEventService {
     pub fn new(bash_events_dir: PathBuf, workdir: Option<PathBuf>) -> Self {
         fs::create_dir_all(&bash_events_dir).expect("Failed to create bash events dir");
+        let db_path = bash_events_dir.join("bash_events.db");
+        let conn = Connection::open(db_path).expect("Failed to open SQLite database");
+
+        // Initialize table
+        conn.execute(
+            "CREATE TABLE IF NOT EXISTS bash_events (
+                id TEXT PRIMARY KEY,
+                timestamp TEXT NOT NULL,
+                command_id TEXT NOT NULL,
+                event_type TEXT NOT NULL,
+                json_data TEXT NOT NULL
+            )",
+            [],
+        )
+        .expect("Failed to create tables");
+
+        // indexes
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_bash_events_command_id ON bash_events (command_id)",
+            [],
+        )
+        .expect("Failed to create index on command_id");
+        
+        conn.execute(
+            "CREATE INDEX IF NOT EXISTS idx_bash_events_timestamp ON bash_events (timestamp)",
+            [],
+        )
+        .expect("Failed to create index on timestamp");
+
         let terminal_session =
             TerminalSession::new(workdir).expect("Failed to initialize terminal session");
 
         Self {
-            bash_events_dir,
+            db: Arc::new(Mutex::new(conn)),
             terminal_session: Arc::new(Mutex::new(terminal_session)),
         }
     }
 
     fn save_event(&self, event: &BashEvent) {
-        let timestamp_str = event.timestamp().format("%Y%m%d%H%M%S");
-        let kind = match event {
-            BashEvent::BashCommand(_) => "BashCommand",
-            BashEvent::BashOutput(_) => "BashOutput",
+        let (id, command_id, event_type) = match event {
+            BashEvent::BashCommand(c) => (c.id, c.id, "BashCommand"),
+            BashEvent::BashOutput(o) => (o.id, o.command_id, "BashOutput"),
         };
 
-        let filename = match event {
-            BashEvent::BashCommand(c) => format!("{}_{}_{}", timestamp_str, kind, c.id.simple()),
-            BashEvent::BashOutput(o) => format!(
-                "{}_{}_{}_{}",
-                timestamp_str,
-                kind,
-                o.command_id.simple(),
-                o.id.simple()
-            ),
-        };
+        let json = serde_json::to_string(event).expect("Failed to serialize event");
+        let timestamp_str = event.timestamp().to_rfc3339();
 
-        let path = self.bash_events_dir.join(filename);
-        let json = serde_json::to_string_pretty(event).expect("Failed to serialize event");
-        fs::write(path, json).expect("Failed to write event file");
-    }
-
-    fn load_event(path: PathBuf) -> Option<BashEvent> {
-        let content = fs::read_to_string(path).ok()?;
-        serde_json::from_str(&content).ok()
+        let conn = self.db.lock().unwrap();
+        conn.execute(
+            "INSERT INTO bash_events (id, timestamp, command_id, event_type, json_data) VALUES (?1, ?2, ?3, ?4, ?5)",
+            params![id.simple().to_string(), timestamp_str, command_id.simple().to_string(), event_type, json],
+        )
+        .expect("Failed to insert event info db");
     }
 
     pub fn start_bash_command(&self, req: ExecuteBashRequest) -> BashCommand {
@@ -130,35 +148,23 @@ impl BashEventService {
     }
 
     pub fn search_bash_events(&self, command_id: Option<Uuid>) -> BashEventPage {
-        let mut events = Vec::new();
-
-        let pattern = if let Some(cid) = command_id {
-            format!("*{}*", cid.simple())
+        let conn = self.db.lock().unwrap();
+        let mut stmt;
+        let mut rows = if let Some(cid) = command_id {
+            stmt = conn.prepare("SELECT json_data FROM bash_events WHERE command_id = ? ORDER BY timestamp ASC").unwrap();
+            stmt.query(params![cid.simple().to_string()]).unwrap()
         } else {
-            "*".to_string()
+            stmt = conn.prepare("SELECT json_data FROM bash_events ORDER BY timestamp ASC").unwrap();
+            stmt.query([]).unwrap()
         };
 
-        let full_pattern = self.bash_events_dir.join(pattern);
-
-        if let Ok(entries) = glob(full_pattern.to_str().unwrap_or("")) {
-            for entry in entries.filter_map(Result::ok) {
-                if let Some(event) = Self::load_event(entry) {
-                    let match_cmd = match command_id {
-                        Some(cid) => match &event {
-                            BashEvent::BashCommand(c) => c.id == cid,
-                            BashEvent::BashOutput(o) => o.command_id == cid,
-                        },
-                        None => true,
-                    };
-
-                    if match_cmd {
-                        events.push(event);
-                    }
-                }
+        let mut events = Vec::new();
+        while let Some(row) = rows.next().unwrap() {
+            let json_data: String = row.get(0).unwrap();
+            if let Ok(event) = serde_json::from_str(&json_data) {
+                events.push(event);
             }
         }
-
-        events.sort_by_key(|e| e.timestamp());
 
         BashEventPage {
             items: events,
