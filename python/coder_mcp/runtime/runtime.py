@@ -12,6 +12,7 @@ from abc import ABC, abstractmethod
 from typing import Any
 
 from agents.mcp import MCPServerStreamableHttp
+from coder_mcp.types import CoderToolName
 
 
 logger = logging.getLogger(__name__)
@@ -35,9 +36,23 @@ class Runtime(ABC):
         pass
 
     @abstractmethod
-    def coder_mcp(self) -> MCPServerStreamableHttp: ...
+    def coder_mcp(
+        self,
+        allowed_tool_names: list[CoderToolName] | None = None,
+        blocked_tool_names: list[CoderToolName] | None = None,
+    ) -> MCPServerStreamableHttp: ...
+
     @abstractmethod
     def coder_mcp_readonly(self) -> MCPServerStreamableHttp: ...
+
+    async def tree(
+        self,
+        path: str = ".",
+        exclude: list[str] | None = None,
+        truncate: int = 10,
+    ) -> str:
+        """Get the tree structure of the workspace."""
+        raise NotImplementedError
 
     async def _wait_for_health(self, url: str, timeout: float = 30.0):
         """Wait for the server to respond to health checks at the given URL."""

@@ -10,7 +10,7 @@ use crate::tools::utils;
 // Re-export argument types from service
 pub use crate::service::{
     CreateFileArgs, DeleteFileArgs, InsertLinesArgs, ListDirectoryArgs, StrReplaceArgs,
-    UndoEditArgs, ViewFileArgs,
+    TreeArgs, UndoEditArgs, ViewFileArgs,
 };
 
 const SNIPPET_CONTEXT_WINDOW: usize = 4;
@@ -1076,4 +1076,130 @@ mod tests {
         assert!(output.contains("file2.txt (1 line)"));
         assert!(output.contains("subdir/"));
     }
+}
+
+pub fn run_tree(
+    args: &TreeArgs,
+    workspace_dir: &Path,
+) -> Result<String, McpError> {
+    let rel_path = args.path.as_deref().unwrap_or(".");
+    let root_path = workspace_dir.join(rel_path);
+
+    if !root_path.exists() {
+        return Err(McpError {
+            code: ErrorCode(-32602),
+            message: format!("Path does not exist: {}", root_path.display()).into(),
+            data: None,
+        });
+    }
+
+    let max_depth = args.max_depth.unwrap_or(usize::MAX);
+    let truncate = args.truncate.unwrap_or(10);
+    
+    let exclude_vec: Vec<String> = args.exclude.as_deref().unwrap_or("")
+        .split(',')
+        .map(|s| s.trim().to_string())
+        .filter(|s| !s.is_empty())
+        .collect();
+
+    let mut output = String::new();
+    // Add root
+    output.push_str(&format!("{}\n", rel_path));
+
+    visit_dirs(
+        &root_path,
+        &mut output,
+        "",
+        0,
+        max_depth,
+        truncate,
+        &exclude_vec,
+    )?;
+
+    Ok(output)
+}
+
+fn visit_dirs(
+    dir: &Path,
+    output: &mut String,
+    prefix: &str,
+    current_depth: usize,
+    max_depth: usize,
+    truncate: usize,
+    exclude: &[String],
+) -> Result<(), McpError> {
+    if current_depth >= max_depth {
+        return Ok(());
+    }
+
+    let entries = fs::read_dir(dir).map_err(|e| McpError {
+        code: ErrorCode(-32603),
+        message: format!("Failed to read directory: {}", e).into(),
+        data: None,
+    })?;
+
+    let mut entries_vec = Vec::new();
+    for entry in entries {
+        let entry = entry.map_err(|e| McpError {
+            code: ErrorCode(-32603),
+            message: format!("Failed to read entry: {}", e).into(),
+            data: None,
+        })?;
+        let name = entry.file_name().to_string_lossy().to_string();
+
+        // Filter excludes and hidden files
+        // Note: exclude matches exact name here.
+        if !name.starts_with('.') && !exclude.contains(&name) {
+            entries_vec.push((name, entry.path()));
+        }
+    }
+
+    entries_vec.sort_by(|a, b| a.0.cmp(&b.0));
+
+    let total_count = entries_vec.len();
+    let mut display_entries = entries_vec;
+    let mut remaining = 0;
+
+    if total_count > truncate {
+        remaining = total_count - truncate;
+        display_entries.truncate(truncate);
+    }
+
+    for (i, (name, path)) in display_entries.iter().enumerate() {
+        let is_last_entry = i == display_entries.len() - 1;
+        let show_more = is_last_entry && remaining > 0;
+
+        // connector depends on whether this is logically the last thing printed.
+        // If we show more, this is NOT the last thing strings-wise.
+        let connector = if !show_more && is_last_entry {
+            "└── "
+        } else {
+            "├── "
+        };
+
+        output.push_str(&format!("{}{}{}\n", prefix, connector, name));
+
+        if path.is_dir() {
+            let new_prefix = if !show_more && is_last_entry {
+                format!("{}    ", prefix)
+            } else {
+                format!("{}│   ", prefix)
+            };
+            visit_dirs(
+                path,
+                output,
+                &new_prefix,
+                current_depth + 1,
+                max_depth,
+                truncate,
+                exclude,
+            )?;
+        }
+
+        if show_more {
+            output.push_str(&format!("{}{}... ({} more)\n", prefix, "└── ", remaining));
+        }
+    }
+
+    Ok(())
 }

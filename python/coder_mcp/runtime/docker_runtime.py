@@ -8,6 +8,7 @@ from agents.mcp import MCPServerStreamableHttp
 
 from coder_mcp.runtime import Runtime
 from coder_mcp.utils import chmod_recursive
+from coder_mcp.types import CoderToolName
 
 
 logger = logging.getLogger(__name__)
@@ -193,14 +194,25 @@ class DockerRuntime(Runtime):
             logger.debug("👋 Container stopped.")
 
     @override
-    def coder_mcp(self) -> MCPServerStreamableHttp:
+    def coder_mcp(
+        self,
+        allowed_tool_names: list[CoderToolName] | None = None,
+        blocked_tool_names: list[CoderToolName] | None = None,
+    ) -> MCPServerStreamableHttp:
         mcp_url = f"http://localhost:{self.host_port}/mcp"
+        tool_filter = {}
+        if allowed_tool_names:
+            tool_filter["allowed_tool_names"] = allowed_tool_names
+        if blocked_tool_names:
+            tool_filter["blocked_tool_names"] = blocked_tool_names
+
         return MCPServerStreamableHttp(
             name="Docker MCP Server",
             params={
                 "url": mcp_url,
                 "timeout": 15,
             },
+            tool_filter=tool_filter,  # type: ignore
             cache_tools_list=True,
             # Allow long-running commands (e.g., cargo build, rustup) up to 5 minutes
             client_session_timeout_seconds=300,
@@ -208,23 +220,49 @@ class DockerRuntime(Runtime):
 
     @override
     def coder_mcp_readonly(self) -> MCPServerStreamableHttp:
-        mcp_url = f"http://localhost:{self.host_port}/mcp-readonly"
-        return MCPServerStreamableHttp(
-            name="Docker MCP Server (Read Only)",
-            params={
-                "url": mcp_url,
-                "timeout": 15,
-            },
-            cache_tools_list=True,
-            # Allow long-running commands (e.g., cargo build, rustup) up to 5 minutes
-            client_session_timeout_seconds=300,
+        return self.coder_mcp(
+            allowed_tool_names=[
+                "view_file",
+                "list_directory",
+                "search_filenames",
+                "search_content",
+            ]
         )
 
-    async def _wait_for_health(self, timeout: float = 30.0):
+    @override
+    async def tree(
+        self,
+        path: str = ".",
+        exclude: list[str] | None = None,
+        truncate: int = 10,
+    ) -> str:
+        from urllib.request import urlopen
+        from urllib.parse import urlencode
+
+        params = [("path", path), ("truncate", str(truncate))]
+        if exclude:
+            params.append(("exclude", ",".join(exclude)))
+
+        query = urlencode(params)
+        url = f"http://localhost:{self.host_port}/tree?{query}"
+
+        loop = asyncio.get_running_loop()
+
+        def fetch():
+            try:
+                with urlopen(url, timeout=5) as response:
+                    return response.read().decode("utf-8")
+            except Exception as e:
+                return f"Error fetching tree structure: {e}"
+
+        return await loop.run_in_executor(None, fetch)
+
+    async def _wait_for_health(self, url: str | None = None, timeout: float = 30.0):
         """Wait for the server to respond to health checks."""
-        health_url = f"http://localhost:{self.host_port}/health"
+        if url is None:
+            url = f"http://localhost:{self.host_port}/health"
         try:
-            await super()._wait_for_health(health_url, timeout)
+            await super()._wait_for_health(url, timeout)
         except RuntimeError as e:
             # If it timed out, try to get logs for debugging.
             proc = await asyncio.create_subprocess_exec(

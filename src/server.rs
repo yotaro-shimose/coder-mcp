@@ -1,7 +1,8 @@
 use crate::logger;
 use crate::runtime::bash::BashEventService;
-use crate::service::{CoderMcpReadOnlyService, CoderMcpService};
-use axum::Router;
+use crate::service::CoderMcpService;
+use crate::tools::file_tools::{run_tree, TreeArgs};
+use axum::{extract::Query, Router};
 use rmcp::transport::{
     StreamableHttpServerConfig,
     streamable_http_server::{session::local::LocalSessionManager, tower::StreamableHttpService},
@@ -18,11 +19,10 @@ pub async fn run_server(
     logger::init_logging();
 
     let cwd = std::env::current_dir().unwrap();
-    let bash_service = BashEventService::new(cwd.join("bash_events"), Some(workspace_path.clone()));
+    let bash_service = BashEventService::new(cwd.join(".coder_mcp"), Some(workspace_path.clone()));
 
     // Create the MCP service
     let coder_mcp_service = CoderMcpService::new(bash_service, workspace_path.clone());
-    let coder_mcp_service_ro = CoderMcpReadOnlyService::new(workspace_path);
 
     // Wrap in StreamableHttpService
     let mcp_service: StreamableHttpService<CoderMcpService, LocalSessionManager> =
@@ -32,19 +32,20 @@ pub async fn run_server(
             StreamableHttpServerConfig::default(),
         );
 
-    // Wrap read-only service
-    let mcp_service_ro: StreamableHttpService<CoderMcpReadOnlyService, LocalSessionManager> =
-        StreamableHttpService::new(
-            move || Ok(coder_mcp_service_ro.clone()),
-            LocalSessionManager::default().into(),
-            StreamableHttpServerConfig::default(),
-        );
-
     // Build our application with routes
+    let tree_workspace = workspace_path.clone();
     let app = Router::new()
         .route("/health", axum::routing::get(|| async { "OK" }))
-        .nest_service("/mcp", mcp_service)
-        .nest_service("/mcp-readonly", mcp_service_ro);
+        .route(
+            "/tree",
+            axum::routing::get(move |Query(args): Query<TreeArgs>| async move {
+                match run_tree(&args, &tree_workspace) {
+                    Ok(tree) => tree,
+                    Err(e) => format!("Error: {}", e.message),
+                }
+            }),
+        )
+        .nest_service("/mcp", mcp_service);
 
     // Run it
     let addr = format!("0.0.0.0:{}", port);

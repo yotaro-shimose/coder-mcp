@@ -76,6 +76,17 @@ pub struct UndoEditArgs {
     pub path: String,
 }
 
+#[derive(serde::Deserialize, schemars::JsonSchema)]
+pub struct TreeArgs {
+    #[serde(default)]
+    pub path: Option<String>,
+    #[serde(default)]
+    pub exclude: Option<String>,
+    pub max_depth: Option<usize>,
+    #[serde(default)]
+    pub truncate: Option<usize>,
+}
+
 #[tool_router]
 impl CoderMcpService {
     pub fn new(bash: BashEventService, workspace_dir: PathBuf) -> Self {
@@ -278,86 +289,3 @@ impl ServerHandler for CoderMcpService {
 // Read-Only Service Implementation
 // ===================================
 
-#[derive(Clone)]
-pub struct CoderMcpReadOnlyService {
-    workspace_dir: PathBuf,
-    tool_router: ToolRouter<CoderMcpReadOnlyService>,
-}
-
-#[tool_router]
-impl CoderMcpReadOnlyService {
-    pub fn new(workspace_dir: PathBuf) -> Self {
-        Self {
-            workspace_dir,
-            tool_router: Self::tool_router(),
-        }
-    }
-
-    #[tool(
-        name = "search_filenames",
-        description = "Fast file pattern matching tool. Finds files by name patterns (e.g. '**/*.js'). Returns matching file paths."
-    )]
-    async fn search_filenames(
-        &self,
-        Parameters(args): Parameters<GlobArgs>,
-    ) -> Result<CallToolResult, McpError> {
-        let output = run_glob(&args, &self.workspace_dir)?;
-        Ok(CallToolResult::success(vec![Content::text(output)]))
-    }
-
-    #[tool(
-        name = "search_content",
-        description = "Fast content search tool. Searches file contents using regex. Returns matching file paths."
-    )]
-    async fn search_content(
-        &self,
-        Parameters(args): Parameters<GrepArgs>,
-    ) -> Result<CallToolResult, McpError> {
-        let output = run_grep(&args, &self.workspace_dir)?;
-        Ok(CallToolResult::success(vec![Content::text(output)]))
-    }
-
-    #[tool(
-        name = "view_file",
-        description = "Read file contents with optional line range. Returns file content with line numbers."
-    )]
-    async fn view_file(
-        &self,
-        Parameters(args): Parameters<ViewFileArgs>,
-    ) -> Result<CallToolResult, McpError> {
-        let output = run_view_file(&args, &self.workspace_dir).await?;
-        Ok(CallToolResult::success(vec![Content::text(output)]))
-    }
-
-    #[tool(
-        name = "list_directory",
-        description = "List contents of a directory, excluding hidden files."
-    )]
-    async fn list_directory(
-        &self,
-        Parameters(args): Parameters<ListDirectoryArgs>,
-    ) -> Result<CallToolResult, McpError> {
-        let output = run_list_directory(&args, &self.workspace_dir).await?;
-        Ok(CallToolResult::success(vec![Content::text(output)]))
-    }
-}
-
-#[tool_handler]
-impl ServerHandler for CoderMcpReadOnlyService {
-    fn get_info(&self) -> ServerInfo {
-        ServerInfo {
-            protocol_version: ProtocolVersion::V_2024_11_05,
-            capabilities: ServerCapabilities::builder().enable_tools().build(),
-            server_info: Implementation::from_build_env(),
-            instructions: Some("Read-Only Coder MCP Server (No Write Access)".to_string()),
-        }
-    }
-
-    async fn initialize(
-        &self,
-        _request: InitializeRequestParam,
-        _context: RequestContext<RoleServer>,
-    ) -> Result<InitializeResult, McpError> {
-        Ok(self.get_info().into())
-    }
-}
