@@ -12,6 +12,7 @@ classifiers = [
 ]
 dependencies = [
     "cffi",
+    "docker>=7.1.0",
     "openai-agents>=0.6.6",
 ]
 dynamic = ["version"]

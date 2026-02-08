@@ -10,6 +10,9 @@ from coder_mcp.runtime import Runtime
 from coder_mcp.utils import chmod_recursive
 from coder_mcp.types import CoderToolName
 
+import docker
+import docker.errors
+import httpx
 
 logger = logging.getLogger(__name__)
 
@@ -68,7 +71,8 @@ class DockerRuntime(Runtime):
                 self.volumes[str(Path(host_path).resolve())] = container_path
 
         self.port_mappings = port_mappings or []
-        self._container_id: Optional[str] = None
+        self._container = None
+        self.client = docker.from_env()
 
     @override
     async def __aenter__(self) -> Self:
@@ -76,96 +80,83 @@ class DockerRuntime(Runtime):
         chmod_recursive(self.workspace_dir)
 
         # 1. Verify image exists
-        proc = await asyncio.create_subprocess_exec(
-            "docker",
-            "inspect",
-            "--type=image",
-            self.image_name,
-            stdout=asyncio.subprocess.PIPE,
-            stderr=asyncio.subprocess.PIPE,
-        )
-        await proc.communicate()
-        if proc.returncode != 0:
+        loop = asyncio.get_running_loop()
+        try:
+            await loop.run_in_executor(None, self.client.images.get, self.image_name)
+        except docker.errors.ImageNotFound:
             raise RuntimeError(
                 f"Docker image '{self.image_name}' not found. Please build it first."
             )
 
-        # 2. Prepare docker run command
-        cmd = [
-            "docker",
-            "run",
-            "-d",
-            "--name",
-            self.container_name,
-            "--rm",
-        ]
-
-        # Add port mapping
+        # 2. Prepare docker run arguments
+        ports = {}
         if self.host_port:
-            cmd.extend(["-p", f"{self.host_port}:3000"])
+            ports["3000/tcp"] = self.host_port
         else:
-            # Use -P to publish all exposed ports with random host ports
-            cmd.append("-P")
-
-        # Add environment variables
-        for k, v in self.env_vars.items():
-            cmd.extend(["-e", f"{k}={v}"])
-
-        # Add volumes
-        for host_path, container_path in self.volumes.items():
-            cmd.extend(["-v", f"{host_path}:{container_path}"])
+            # Publish all exposed ports to random host ports
+            ports["3000/tcp"] = None
 
         # Add extra port mappings
         for mapping in self.port_mappings:
-            cmd.extend(["-p", mapping])
+            # mapping is like "8080:80" or "80"
+            if ":" in mapping:
+                host, container = mapping.split(":")
+                ports[f"{container}/tcp"] = host
+            else:
+                ports[f"{mapping}/tcp"] = None
 
-        cmd.append(self.image_name)
+        volumes = {str(self.workspace_dir): {"bind": "/workspace", "mode": "rw"}}
+        for host_path, container_path in self.volumes.items():
+            if container_path == "/workspace":
+                continue
+            volumes[str(Path(host_path).resolve())] = {
+                "bind": container_path,
+                "mode": "rw",
+            }
 
         # 3. Start container
-        logger.debug(f"🐳 Running: {' '.join(cmd)}")
-        proc = await asyncio.create_subprocess_exec(
-            *cmd, stdout=asyncio.subprocess.PIPE, stderr=asyncio.subprocess.PIPE
-        )
-        stdout, stderr = await proc.communicate()
-        if proc.returncode != 0:
-            logger.error(f"❌ Container creation failed: {stderr.decode()}")
-            raise RuntimeError(f"Failed to start Docker container: {stderr.decode()}")
-
-        self._container_id = stdout.decode().strip()
         logger.debug(
-            f"✅ Container created successfully (ID: {self._container_id[:12]})"
+            f"🐳 Starting container '{self.container_name}' with image '{self.image_name}'"
         )
 
+        try:
+            self._container = await loop.run_in_executor(
+                None,
+                lambda: self.client.containers.run(
+                    self.image_name,
+                    detach=True,
+                    name=self.container_name,
+                    remove=True,
+                    ports=ports,
+                    environment=self.env_vars,
+                    volumes=volumes,
+                ),
+            )
+        except docker.errors.APIError as e:
+            logger.error(f"❌ Container creation failed: {e}")
+            raise RuntimeError(f"Failed to start Docker container: {e}")
+
+        logger.debug(
+            f"✅ Container created successfully (ID: {self._container.short_id})"
+        )
+
+        # If host_port was not specified, find what Docker assigned
         # If host_port was not specified, find what Docker assigned
         if not self.host_port:
             # Give Docker a moment to set up port mappings
             await asyncio.sleep(0.5)
 
-            proc = await asyncio.create_subprocess_exec(
-                "docker",
-                "port",
-                self.container_name,
-                "3000",
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE,
-            )
-            stdout, stderr = await proc.communicate()
-            if proc.returncode != 0:
-                raise RuntimeError(
-                    f"Failed to get assigned port from Docker.\n"
-                    f"stderr: {stderr.decode()}\n"
-                    f"stdout: {stdout.decode()}"
-                )
-            # stdout is something like "0.0.0.0:49483\n:::49483"
-            port_output = stdout.decode()
-            for line in port_output.splitlines():
-                if ":" in line:
-                    self.host_port = int(line.split(":")[-1])
-                    break
+            # Reload container attributes to get the assigned ports
+            await loop.run_in_executor(None, self._container.reload)
+
+            # Ports structure: {'3000/tcp': [{'HostIp': '0.0.0.0', 'HostPort': '32768'}], ...}
+            ports = self._container.attrs["NetworkSettings"]["Ports"]
+            if "3000/tcp" in ports and ports["3000/tcp"]:
+                self.host_port = int(ports["3000/tcp"][0]["HostPort"])
+
             if not self.host_port:
                 raise RuntimeError(
-                    f"Could not determine assigned port from Docker.\n"
-                    f"Port output: {port_output}"
+                    f"Could not determine assigned port from Docker.\nPorts: {ports}"
                 )
 
         logger.debug(
@@ -178,19 +169,18 @@ class DockerRuntime(Runtime):
 
     @override
     async def __aexit__(self, exc_type, exc_val, exc_tb):
-        if self._container_id:
+        if self._container:
             logger.debug(
                 f"🛑 Stopping and removing Docker container '{self.container_name}'..."
             )
-            proc = await asyncio.create_subprocess_exec(
-                "docker",
-                "stop",
-                self.container_name,
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE,
-            )
-            await proc.communicate()
-            self._container_id = None
+            loop = asyncio.get_running_loop()
+            try:
+                await loop.run_in_executor(None, self._container.stop)
+                # We used remove=True in run(), so it should auto-remove
+            except Exception as e:
+                logger.warning(f"Error stopping container: {e}")
+
+            self._container = None
             logger.debug("👋 Container stopped.")
 
     @override
@@ -236,26 +226,20 @@ class DockerRuntime(Runtime):
         exclude: list[str] | None = None,
         truncate: int = 10,
     ) -> str:
-        from urllib.request import urlopen
-        from urllib.parse import urlencode
 
-        params = [("path", path), ("truncate", str(truncate))]
+        params = {"path": path, "truncate": str(truncate)}
         if exclude:
-            params.append(("exclude", ",".join(exclude)))
+            params["exclude"] = ",".join(exclude)
 
-        query = urlencode(params)
-        url = f"http://localhost:{self.host_port}/tree?{query}"
+        url = f"http://localhost:{self.host_port}/tree"
 
-        loop = asyncio.get_running_loop()
-
-        def fetch():
+        async with httpx.AsyncClient() as client:
             try:
-                with urlopen(url, timeout=5) as response:
-                    return response.read().decode("utf-8")
+                response = await client.get(url, params=params, timeout=5.0)
+                response.raise_for_status()
+                return response.text
             except Exception as e:
                 return f"Error fetching tree structure: {e}"
-
-        return await loop.run_in_executor(None, fetch)
 
     async def _wait_for_health(self, url: str | None = None, timeout: float = 30.0):
         """Wait for the server to respond to health checks."""
@@ -265,15 +249,10 @@ class DockerRuntime(Runtime):
             await super()._wait_for_health(url, timeout)
         except RuntimeError as e:
             # If it timed out, try to get logs for debugging.
-            proc = await asyncio.create_subprocess_exec(
-                "docker",
-                "logs",
-                self.container_name,
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE,
-            )
-            stdout, _ = await proc.communicate()
-            logger.error(
-                f"❌ Server failed to become healthy. Logs:\n{stdout.decode()}"
-            )
+            if self._container:
+                loop = asyncio.get_running_loop()
+                logs = await loop.run_in_executor(None, self._container.logs)
+                logger.error(
+                    f"❌ Server failed to become healthy. Logs:\n{logs.decode('utf-8')}"
+                )
             raise e

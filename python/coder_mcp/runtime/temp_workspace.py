@@ -30,10 +30,12 @@ class TempWorkspace:
         self.prefix = prefix
         self.copy_method = copy_method
         self.temp_dir: Optional[Path] = None
+        self._temp_dir_ctx: Optional[tempfile.TemporaryDirectory] = None
 
     def _setup(self) -> Path:
-        # 1. Create Temp Directory
-        self.temp_dir = Path(tempfile.mkdtemp(prefix=self.prefix))
+        # 1. Create Temp Directory using TemporaryDirectory
+        self._temp_dir_ctx = tempfile.TemporaryDirectory(prefix=self.prefix)
+        self.temp_dir = Path(self._temp_dir_ctx.name)
 
         # 2. Copy Template or Clone
         if self.template_dir is not None and self.template_dir.exists():
@@ -48,9 +50,14 @@ class TempWorkspace:
                 except subprocess.CalledProcessError as e:
                     # Fallback to copy if clone fails (e.g. not a git repo)
                     logger.warning(f"Git clone failed: {e}. Falling back to copy.")
-                    if self.temp_dir.exists():
-                        shutil.rmtree(self.temp_dir)
-                    self.temp_dir.mkdir()
+
+                    # Clean up any partial clone artifacts
+                    for item in self.temp_dir.iterdir():
+                        if item.is_dir():
+                            shutil.rmtree(item)
+                        else:
+                            item.unlink()
+
                     shutil.copytree(
                         self.template_dir, self.temp_dir, dirs_exist_ok=True
                     )
@@ -116,8 +123,20 @@ class TempWorkspace:
         return self.temp_dir
 
     def _cleanup(self):
-        if self.temp_dir and self.temp_dir.exists():
-            shutil.rmtree(self.temp_dir)
+        if self._temp_dir_ctx:
+            try:
+                self._temp_dir_ctx.cleanup()
+            except Exception:
+                if self.temp_dir and self.temp_dir.exists():
+                    try:
+                        shutil.rmtree(self.temp_dir, ignore_errors=True)
+                    except Exception as e_:
+                        logger.warning(
+                            f"Failed to cleanup temp directory {self.temp_dir}: {e_}"
+                        )
+            finally:
+                self._temp_dir_ctx = None
+                self.temp_dir = None
 
     def __enter__(self) -> Path:
         return self._setup()
