@@ -23,6 +23,7 @@ pub struct CoderMcpService {
     workspace_dir: PathBuf,
     editor_history: Arc<Mutex<HashMap<PathBuf, Vec<String>>>>,
     tool_router: ToolRouter<CoderMcpService>,
+    truncation_limit: usize,
 }
 
 // Bash tool arguments
@@ -89,13 +90,33 @@ pub struct TreeArgs {
 
 #[tool_router]
 impl CoderMcpService {
-    pub fn new(bash: BashEventService, workspace_dir: PathBuf) -> Self {
+    pub fn new(bash: BashEventService, workspace_dir: PathBuf, truncation_limit: usize) -> Self {
         Self {
             bash: Arc::new(bash),
             workspace_dir,
             editor_history: Arc::new(Mutex::new(HashMap::new())),
             tool_router: Self::tool_router(),
+            truncation_limit,
         }
+    }
+
+    fn truncate_output(&self, text: String) -> String {
+        let char_limit = self.truncation_limit;
+        let char_count = text.chars().count();
+        if char_count <= char_limit {
+            return text;
+        }
+
+        let half = 3000;
+        if char_count <= half * 2 {
+            // Cannot take distinct first and last 3000, so return whole text
+            // even if it exceeds the configured limit.
+            return text;
+        }
+
+        let start: String = text.chars().take(half).collect();
+        let end: String = text.chars().rev().take(half).collect::<String>().chars().rev().collect();
+        format!("{}...[truncated]...{}", start, end)
     }
 
     #[tool(
@@ -107,7 +128,7 @@ impl CoderMcpService {
         Parameters(args): Parameters<GlobArgs>,
     ) -> Result<CallToolResult, McpError> {
         let output = run_glob(&args, &self.workspace_dir)?;
-        Ok(CallToolResult::success(vec![Content::text(output)]))
+        Ok(CallToolResult::success(vec![Content::text(self.truncate_output(output))]))
     }
 
     #[tool(
@@ -119,7 +140,7 @@ impl CoderMcpService {
         Parameters(args): Parameters<GrepArgs>,
     ) -> Result<CallToolResult, McpError> {
         let output = run_grep(&args, &self.workspace_dir)?;
-        Ok(CallToolResult::success(vec![Content::text(output)]))
+        Ok(CallToolResult::success(vec![Content::text(self.truncate_output(output))]))
     }
 
     #[tool(
@@ -165,7 +186,7 @@ impl CoderMcpService {
                         result_str
                             .push_str(&format!("[Command finished with exit code {}]", exit_code));
                     }
-                    return Ok(CallToolResult::success(vec![Content::text(result_str)]));
+                    return Ok(CallToolResult::success(vec![Content::text(self.truncate_output(result_str))]));
                 }
             }
 
@@ -189,7 +210,7 @@ impl CoderMcpService {
         Parameters(args): Parameters<ViewFileArgs>,
     ) -> Result<CallToolResult, McpError> {
         let output = run_view_file(&args, &self.workspace_dir).await?;
-        Ok(CallToolResult::success(vec![Content::text(output)]))
+        Ok(CallToolResult::success(vec![Content::text(self.truncate_output(output))]))
     }
 
     #[tool(
@@ -201,7 +222,7 @@ impl CoderMcpService {
         Parameters(args): Parameters<ListDirectoryArgs>,
     ) -> Result<CallToolResult, McpError> {
         let output = run_list_directory(&args, &self.workspace_dir).await?;
-        Ok(CallToolResult::success(vec![Content::text(output)]))
+        Ok(CallToolResult::success(vec![Content::text(self.truncate_output(output))]))
     }
 
     #[tool(
@@ -213,7 +234,7 @@ impl CoderMcpService {
         Parameters(args): Parameters<CreateFileArgs>,
     ) -> Result<CallToolResult, McpError> {
         let output = run_create_file(&args, &self.workspace_dir).await?;
-        Ok(CallToolResult::success(vec![Content::text(output)]))
+        Ok(CallToolResult::success(vec![Content::text(self.truncate_output(output))]))
     }
 
     #[tool(
@@ -225,7 +246,7 @@ impl CoderMcpService {
         Parameters(args): Parameters<StrReplaceArgs>,
     ) -> Result<CallToolResult, McpError> {
         let output = run_str_replace(&args, &self.workspace_dir, &self.editor_history).await?;
-        Ok(CallToolResult::success(vec![Content::text(output)]))
+        Ok(CallToolResult::success(vec![Content::text(self.truncate_output(output))]))
     }
 
     #[tool(
@@ -237,7 +258,7 @@ impl CoderMcpService {
         Parameters(args): Parameters<InsertLinesArgs>,
     ) -> Result<CallToolResult, McpError> {
         let output = run_insert_lines(&args, &self.workspace_dir, &self.editor_history).await?;
-        Ok(CallToolResult::success(vec![Content::text(output)]))
+        Ok(CallToolResult::success(vec![Content::text(self.truncate_output(output))]))
     }
 
     #[tool(
@@ -249,7 +270,7 @@ impl CoderMcpService {
         Parameters(args): Parameters<DeleteFileArgs>,
     ) -> Result<CallToolResult, McpError> {
         let output = run_delete_file(&args, &self.workspace_dir).await?;
-        Ok(CallToolResult::success(vec![Content::text(output)]))
+        Ok(CallToolResult::success(vec![Content::text(self.truncate_output(output))]))
     }
 
     #[tool(
@@ -261,7 +282,7 @@ impl CoderMcpService {
         Parameters(args): Parameters<UndoEditArgs>,
     ) -> Result<CallToolResult, McpError> {
         let output = run_undo_edit(&args, &self.workspace_dir, &self.editor_history).await?;
-        Ok(CallToolResult::success(vec![Content::text(output)]))
+        Ok(CallToolResult::success(vec![Content::text(self.truncate_output(output))]))
     }
 }
 

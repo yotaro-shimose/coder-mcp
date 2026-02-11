@@ -20,7 +20,7 @@ class RustCodingEnvironment(DockerRuntime):
         image_name: str = "coder-mcp",
         cache_dir: str | Path = "./.sccache",
         cargo_cache_dir: str | Path = "./.cargo_cache",
-        workspace_dir: str | Path = "./workspace",
+        workspace_dir: Optional[str | Path] = None,
         container_name: Optional[str] = None,
         host_port: Optional[int] = None,
         env_vars: Optional[Dict[str, str]] = None,
@@ -30,7 +30,10 @@ class RustCodingEnvironment(DockerRuntime):
         self.image_name = image_name
         self.cache_dir = Path(cache_dir).resolve()
         self.cargo_cache_dir = Path(cargo_cache_dir).resolve()
-        self.workspace_dir = Path(workspace_dir).resolve()
+        if workspace_dir:
+            self.workspace_dir = Path(workspace_dir).resolve()
+        else:
+            self.workspace_dir = None
 
         # Merge environment variables for Rust caching
         env = env_vars or {}
@@ -43,10 +46,11 @@ class RustCodingEnvironment(DockerRuntime):
         vols[str(self.cache_dir)] = "/var/cache/sccache"
         vols[str(self.cargo_cache_dir / "registry")] = "/usr/local/cargo/registry"
         vols[str(self.cargo_cache_dir / "git")] = "/usr/local/cargo/git"
-        vols[str(self.workspace_dir)] = "/workspace"
+        if self.workspace_dir:
+            vols[str(self.workspace_dir)] = "/workspace"
 
         super().__init__(
-            workspace_dir=str(self.workspace_dir),
+            workspace_dir=self.workspace_dir,
             image_name=image_name,
             container_name=container_name,
             host_port=host_port,

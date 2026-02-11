@@ -14,6 +14,7 @@ pub async fn run_server(
     workspace_path: PathBuf,
     port: u16,
     shutdown_rx: tokio::sync::oneshot::Receiver<()>,
+    truncation_limit: Option<usize>,
 ) {
     // Set up tracing using the local logger
     logger::init_logging();
@@ -22,7 +23,8 @@ pub async fn run_server(
     let bash_service = BashEventService::new(cwd.join(".coder_mcp"), Some(workspace_path.clone()));
 
     // Create the MCP service
-    let coder_mcp_service = CoderMcpService::new(bash_service, workspace_path.clone());
+    let limit = truncation_limit.unwrap_or(20000);
+    let coder_mcp_service = CoderMcpService::new(bash_service, workspace_path.clone(), limit);
 
     // Wrap in StreamableHttpService
     let mcp_service: StreamableHttpService<CoderMcpService, LocalSessionManager> =

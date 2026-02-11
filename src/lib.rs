@@ -40,7 +40,7 @@ impl CServer {
             *shutdown_tx.lock().unwrap() = Some(tx);
 
             let handle = tokio::spawn(async move {
-                server::run_server(workspace_path, port, rx).await;
+                server::run_server(workspace_path, port, rx, None).await;
             });
 
             *server_handle.lock().unwrap() = Some(handle);

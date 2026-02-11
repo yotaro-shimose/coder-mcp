@@ -23,5 +23,9 @@ async fn main() {
         let _ = tx.send(());
     });
 
-    run_server(workspace_path, port, rx).await;
+    let truncation_limit = env::var("TRUNCATION_LIMIT")
+        .ok()
+        .and_then(|s| s.parse().ok());
+
+    run_server(workspace_path, port, rx, truncation_limit).await;
 }

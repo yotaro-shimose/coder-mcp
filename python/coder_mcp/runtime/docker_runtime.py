@@ -35,7 +35,7 @@ class DockerRuntime(Runtime):
 
     def __init__(
         self,
-        workspace_dir: str | Path,
+        workspace_dir: Optional[str | Path] = None,
         image_name: str = "coder-mcp",
         container_name: Optional[str] = None,
         host_port: Optional[int] = None,
@@ -46,8 +46,8 @@ class DockerRuntime(Runtime):
         """Initialize DockerRuntime.
 
         Args:
-            workspace_dir: Host directory to mount as /workspace in container (required).
-                          All file operations go here and persist after container stops.
+            workspace_dir: Host directory to mount as /workspace in container (optional).
+                          If provided, all file operations will persist here.
             image_name: Docker image to run (default: coder-mcp)
             container_name: Optional custom container name
             host_port: Optional fixed host port (otherwise dynamically assigned)
@@ -55,17 +55,23 @@ class DockerRuntime(Runtime):
             volumes: Additional volume mounts {host_path: container_path}
             port_mappings: Additional port mappings
         """
-        # Resolve workspace path and ensure it exists
-        self.workspace_dir = Path(workspace_dir).resolve()
-        self.workspace_dir.mkdir(parents=True, exist_ok=True)
+        # Resolve workspace path and ensure it exists if provided
+        if workspace_dir:
+            self.workspace_dir = Path(workspace_dir).resolve()
+            self.workspace_dir.mkdir(parents=True, exist_ok=True)
+        else:
+            self.workspace_dir = None
 
         self.image_name = image_name
         self.container_name = container_name or f"mcp-server-{uuid.uuid4().hex[:8]}"
         self.host_port = host_port
         self.env_vars = env_vars or {}
 
-        # Auto-mount workspace_dir to /workspace, plus any additional volumes
-        self.volumes = {str(self.workspace_dir): "/workspace"}
+        # Auto-mount workspace_dir to /workspace if provided, plus any additional volumes
+        self.volumes = {}
+        if self.workspace_dir:
+            self.volumes[str(self.workspace_dir)] = "/workspace"
+
         if volumes:
             for host_path, container_path in volumes.items():
                 self.volumes[str(Path(host_path).resolve())] = container_path
@@ -76,8 +82,9 @@ class DockerRuntime(Runtime):
 
     @override
     async def __aenter__(self) -> Self:
-        # 0. Ensure workspace_dir is world-writable for the container user (recursive)
-        chmod_recursive(self.workspace_dir)
+        # 0. Ensure workspace_dir is world-writable for the container user (recursive) if provided
+        if self.workspace_dir:
+            chmod_recursive(self.workspace_dir)
 
         # 1. Verify image exists
         loop = asyncio.get_running_loop()
@@ -105,7 +112,10 @@ class DockerRuntime(Runtime):
             else:
                 ports[f"{mapping}/tcp"] = None
 
-        volumes = {str(self.workspace_dir): {"bind": "/workspace", "mode": "rw"}}
+        volumes = {}
+        if self.workspace_dir:
+            volumes[str(self.workspace_dir)] = {"bind": "/workspace", "mode": "rw"}
+
         for host_path, container_path in self.volumes.items():
             if container_path == "/workspace":
                 continue
