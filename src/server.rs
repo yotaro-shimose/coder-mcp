@@ -1,3 +1,4 @@
+use crate::api::{run_handler, str_replace_handler, view_file_handler, AppState};
 use crate::logger;
 use crate::runtime::bash::BashEventService;
 use crate::service::CoderMcpService;
@@ -7,7 +8,10 @@ use rmcp::transport::{
     StreamableHttpServerConfig,
     streamable_http_server::{session::local::LocalSessionManager, tower::StreamableHttpService},
 };
+use std::collections::HashMap;
 use std::path::PathBuf;
+use std::sync::Arc;
+use tokio::sync::Mutex;
 use tokio::net::TcpListener;
 
 pub async fn run_server(
@@ -22,9 +26,9 @@ pub async fn run_server(
     let cwd = std::env::current_dir().unwrap();
     let bash_service = BashEventService::new(cwd.join(".coder_mcp"), Some(workspace_path.clone()));
 
-    // Create the MCP service
+    // Create the full MCP service
     let limit = truncation_limit.unwrap_or(20000);
-    let coder_mcp_service = CoderMcpService::new(bash_service, workspace_path.clone(), limit);
+    let coder_mcp_service = CoderMcpService::new(bash_service.clone(), workspace_path.clone(), limit);
 
     // Wrap in StreamableHttpService
     let mcp_service: StreamableHttpService<CoderMcpService, LocalSessionManager> =
@@ -33,6 +37,14 @@ pub async fn run_server(
             LocalSessionManager::default().into(),
             StreamableHttpServerConfig::default(),
         );
+
+    // Create shared state for REST API
+    let state = Arc::new(AppState {
+        bash: Arc::new(bash_service), // Cloning here probably
+        workspace_dir: workspace_path.clone(),
+        editor_history: Arc::new(Mutex::new(HashMap::new())),
+        truncation_limit: limit,
+    });
 
     // Build our application with routes
     let tree_workspace = workspace_path.clone();
@@ -47,7 +59,11 @@ pub async fn run_server(
                 }
             }),
         )
-        .nest_service("/mcp", mcp_service);
+        .route("/run", axum::routing::post(run_handler))
+        .route("/str_replace", axum::routing::post(str_replace_handler))
+        .route("/view_file", axum::routing::post(view_file_handler))
+        .nest_service("/mcp", mcp_service)
+        .with_state(state);
 
     // Run it
     let addr = format!("0.0.0.0:{}", port);

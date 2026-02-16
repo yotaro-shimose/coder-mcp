@@ -93,3 +93,14 @@ class LocalRuntime(Runtime):
                 "search_content",
             ]
         )
+
+    @override
+    def coder_mcp_simplified(self) -> MCPServerStreamableHttp:
+        simplified_url = f"http://localhost:{self.port}/mcp-simplified"
+        return MCPServerStreamableHttp(
+            name="Local MCP Server (Simplified)",
+            params={
+                "url": simplified_url,
+            },
+            cache_tools_list=False,
+        )

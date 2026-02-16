@@ -73,4 +73,5 @@ fn coder_mcp(_py: Python, m: &Bound<'_, PyModule>) -> PyResult<()> {
     Ok(())
 }
 pub mod service;
+pub mod api;
 pub mod tools;

@@ -2,6 +2,7 @@ import logging
 from typing import Self
 from pathlib import Path
 from typing import Dict, Optional, List
+import httpx
 from coder_mcp.runtime.docker_runtime import DockerRuntime
 
 
@@ -75,3 +76,48 @@ class RustCodingEnvironment(DockerRuntime):
             dir_path.chmod(0o777)
 
         return await super().__aenter__()
+
+    async def run_cargo(self) -> str:
+        """Runs `cargo run` in the container via REST API."""
+        url = f"http://localhost:{self.host_port}/run"
+        async with httpx.AsyncClient() as client:
+            response = await client.post(
+                url, json={}, timeout=300.0
+            )  # Long timeout for compilation
+            if response.status_code != 200:
+                raise RuntimeError(
+                    f"cargo run failed ({response.status_code}): {response.text}"
+                )
+            return response.json()["output"]
+
+    async def str_replace(self, old_str: str, new_str: str) -> str:
+        """Performs string replacement on src/main.rs via REST API."""
+        url = f"http://localhost:{self.host_port}/str_replace"
+        async with httpx.AsyncClient() as client:
+            response = await client.post(
+                url, json={"old_str": old_str, "new_str": new_str}, timeout=10.0
+            )
+            if response.status_code != 200:
+                raise RuntimeError(
+                    f"str_replace failed ({response.status_code}): {response.text}"
+                )
+            return response.json()["output"]
+
+    async def view_file(
+        self, path: str, start_line: int | None = None, end_line: int | None = None
+    ) -> str:
+        """Reads file content via REST API."""
+        url = f"http://localhost:{self.host_port}/view_file"
+        payload: Dict[str, str | int] = {"path": path}
+        if start_line is not None:
+            payload["start_line"] = start_line
+        if end_line is not None:
+            payload["end_line"] = end_line
+
+        async with httpx.AsyncClient() as client:
+            response = await client.post(url, json=payload, timeout=10.0)
+            if response.status_code != 200:
+                raise RuntimeError(
+                    f"view_file failed ({response.status_code}): {response.text}"
+                )
+            return response.json()["output"]
