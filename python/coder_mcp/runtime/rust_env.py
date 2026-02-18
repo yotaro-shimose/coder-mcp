@@ -77,8 +77,12 @@ class RustCodingEnvironment(DockerRuntime):
 
         return await super().__aenter__()
 
-    async def run_cargo(self) -> str:
-        """Runs `cargo run` in the container via REST API."""
+    async def run_cargo(self) -> tuple[str, bool]:
+        """Runs `cargo run` in the container via REST API.
+
+        Returns:
+            A tuple of (output, success), where success is True if exit code is 0.
+        """
         url = f"http://localhost:{self.host_port}/run"
         async with httpx.AsyncClient() as client:
             response = await client.post(
@@ -88,7 +92,10 @@ class RustCodingEnvironment(DockerRuntime):
                 raise RuntimeError(
                     f"cargo run failed ({response.status_code}): {response.text}"
                 )
-            return response.json()["output"]
+            data = response.json()
+            exit_code = data.get("exit_code")
+            success = exit_code == 0
+            return data["output"], success
 
     async def str_replace(self, old_str: str, new_str: str) -> str:
         """Performs string replacement on src/main.rs via REST API."""

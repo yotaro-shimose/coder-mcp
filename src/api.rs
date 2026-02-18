@@ -39,6 +39,7 @@ pub struct ViewFilePayload {
 #[derive(Serialize)]
 pub struct CommandOutput {
     pub output: String,
+    pub exit_code: Option<i32>,
 }
 
 fn truncate_output(text: String, limit: usize) -> String {
@@ -105,6 +106,7 @@ pub async fn run_handler(
                     StatusCode::OK,
                     Json(CommandOutput {
                         output: truncate_output(result_str, state.truncation_limit),
+                        exit_code: out.exit_code,
                     }),
                 );
             }
@@ -116,6 +118,7 @@ pub async fn run_handler(
                 StatusCode::GATEWAY_TIMEOUT,
                 Json(CommandOutput {
                     output: "Polling timed out".to_string(),
+                    exit_code: None,
                 }),
             );
         }
@@ -137,12 +140,14 @@ pub async fn str_replace_handler(
             StatusCode::OK,
             Json(CommandOutput {
                 output: truncate_output(output, state.truncation_limit),
+                exit_code: Some(0),
             }),
         ),
         Err(e) => (
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(CommandOutput {
                 output: format!("Error: {}", e.message),
+                exit_code: Some(1),
             }),
         ),
     }
@@ -163,12 +168,14 @@ pub async fn view_file_handler(
             StatusCode::OK,
             Json(CommandOutput {
                 output: truncate_output(output, state.truncation_limit),
+                exit_code: Some(0),
             }),
         ),
         Err(e) => (
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(CommandOutput {
                 output: format!("Error: {}", e.message),
+                exit_code: Some(1),
             }),
         ),
     }
