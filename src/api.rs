@@ -30,6 +30,12 @@ pub struct StrReplacePayload {
 }
 
 #[derive(Deserialize)]
+pub struct SetContentPayload {
+    pub path: String,
+    pub content: String,
+}
+
+#[derive(Deserialize)]
 pub struct ViewFilePayload {
     pub path: String,
     pub start_line: Option<u64>,
@@ -175,6 +181,44 @@ pub async fn view_file_handler(
             StatusCode::INTERNAL_SERVER_ERROR,
             Json(CommandOutput {
                 output: format!("Error: {}", e.message),
+                exit_code: Some(1),
+            }),
+        ),
+    }
+}
+
+pub async fn set_content_handler(
+    State(state): State<Arc<AppState>>,
+    Json(payload): Json<SetContentPayload>,
+) -> impl IntoResponse {
+    let path = state.workspace_dir.join(&payload.path);
+
+    // Save history if the file already exists
+    if path.exists() {
+        if let Ok(content) = std::fs::read_to_string(&path) {
+            let mut history = state.editor_history.lock().await;
+            history
+                .entry(path.clone())
+                .or_default()
+                .push(content);
+        }
+    } else if let Some(parent) = path.parent() {
+        let _ = std::fs::create_dir_all(parent);
+    }
+
+    match std::fs::write(&path, &payload.content) {
+        Ok(_) => (
+            StatusCode::OK,
+            Json(CommandOutput {
+                // Return truncated content as output, or just a success message
+                output: truncate_output(payload.content, state.truncation_limit),
+                exit_code: Some(0),
+            }),
+        ),
+        Err(e) => (
+            StatusCode::INTERNAL_SERVER_ERROR,
+            Json(CommandOutput {
+                output: format!("Error: {}", e),
                 exit_code: Some(1),
             }),
         ),

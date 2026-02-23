@@ -3,10 +3,16 @@ from typing import Self
 from pathlib import Path
 from typing import Dict, Optional, List
 import httpx
+from pydantic import BaseModel, ValidationError
 from coder_mcp.runtime.docker_runtime import DockerRuntime
 
 
 logger = logging.getLogger(__name__)
+
+
+class CommandOutput(BaseModel):
+    output: str
+    exit_code: Optional[int] = None
 
 
 class RustCodingEnvironment(DockerRuntime):
@@ -92,23 +98,45 @@ class RustCodingEnvironment(DockerRuntime):
                 raise RuntimeError(
                     f"cargo run failed ({response.status_code}): {response.text}"
                 )
-            data = response.json()
-            exit_code = data.get("exit_code")
-            success = exit_code == 0
-            return data["output"], success
+            try:
+                data = CommandOutput.model_validate(response.json())
+            except (ValueError, ValidationError) as e:
+                raise RuntimeError(
+                    f"cargo run returned invalid format ({response.status_code}): {response.text}"
+                ) from e
 
-    async def str_replace(self, old_str: str, new_str: str) -> str:
-        """Performs string replacement on src/main.rs via REST API."""
+            success = data.exit_code == 0
+            return data.output, success
+
+    async def str_replace(self, old_str: str, new_str: str) -> tuple[str, bool]:
+        """Performs string replacement on src/main.rs via REST API.
+
+        Returns:
+            A tuple of (output, success), where success is True if exit code is 0.
+        """
         url = f"http://localhost:{self.host_port}/str_replace"
         async with httpx.AsyncClient() as client:
             response = await client.post(
                 url, json={"old_str": old_str, "new_str": new_str}, timeout=10.0
             )
+
+            try:
+                data = CommandOutput.model_validate(response.json())
+            except ValidationError as e:
+                raise RuntimeError(
+                    f"str_replace returned invalid format ({response.status_code}): {response.text}"
+                ) from e
+
+            if data.exit_code is not None:
+                success = data.exit_code == 0
+                return data.output, success
+
             if response.status_code != 200:
                 raise RuntimeError(
                     f"str_replace failed ({response.status_code}): {response.text}"
                 )
-            return response.json()["output"]
+
+            return data.output, True
 
     async def view_file(
         self, path: str, start_line: int | None = None, end_line: int | None = None
@@ -127,4 +155,29 @@ class RustCodingEnvironment(DockerRuntime):
                 raise RuntimeError(
                     f"view_file failed ({response.status_code}): {response.text}"
                 )
-            return response.json()["output"]
+            try:
+                data = CommandOutput.model_validate(response.json())
+                return data.output
+            except ValidationError as e:
+                raise RuntimeError(
+                    f"view_file returned invalid format ({response.status_code}): {response.text}"
+                ) from e
+
+    async def set_content(self, path: str, content: str) -> str:
+        """Sets file content via REST API."""
+        url = f"http://localhost:{self.host_port}/set_content"
+        payload = {"path": path, "content": content}
+
+        async with httpx.AsyncClient() as client:
+            response = await client.post(url, json=payload, timeout=10.0)
+            if response.status_code != 200:
+                raise RuntimeError(
+                    f"set_content failed ({response.status_code}): {response.text}"
+                )
+            try:
+                data = CommandOutput.model_validate(response.json())
+                return data.output
+            except ValidationError as e:
+                raise RuntimeError(
+                    f"set_content returned invalid format ({response.status_code}): {response.text}"
+                ) from e

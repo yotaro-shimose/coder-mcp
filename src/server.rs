@@ -1,4 +1,4 @@
-use crate::api::{run_handler, str_replace_handler, view_file_handler, AppState};
+use crate::api::{run_handler, set_content_handler, str_replace_handler, view_file_handler, AppState};
 use crate::logger;
 use crate::runtime::bash::BashEventService;
 use crate::service::CoderMcpService;
@@ -62,6 +62,7 @@ pub async fn run_server(
         .route("/run", axum::routing::post(run_handler))
         .route("/str_replace", axum::routing::post(str_replace_handler))
         .route("/view_file", axum::routing::post(view_file_handler))
+        .route("/set_content", axum::routing::post(set_content_handler))
         .nest_service("/mcp", mcp_service)
         .with_state(state);
 
