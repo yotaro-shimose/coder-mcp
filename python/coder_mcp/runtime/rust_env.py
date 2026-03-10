@@ -1,11 +1,11 @@
 import logging
-from typing import Self
 from pathlib import Path
-from typing import Dict, Optional, List
+from typing import Dict, List, Optional, Self
+
 import httpx
 from pydantic import BaseModel, ValidationError
-from coder_mcp.runtime.docker_runtime import DockerRuntime
 
+from coder_mcp.runtime.docker_runtime import DockerRuntime
 
 logger = logging.getLogger(__name__)
 
@@ -13,6 +13,12 @@ logger = logging.getLogger(__name__)
 class CommandOutput(BaseModel):
     output: str
     exit_code: Optional[int] = None
+
+
+class RustEnvError(Exception):
+    """An error that occurred while interacting with the Rust coding environment."""
+
+    pass
 
 
 class RustCodingEnvironment(DockerRuntime):
@@ -91,17 +97,20 @@ class RustCodingEnvironment(DockerRuntime):
         """
         url = f"http://localhost:{self.host_port}/run"
         async with httpx.AsyncClient() as client:
-            response = await client.post(
-                url, json={}, timeout=300.0
-            )  # Long timeout for compilation
+            try:
+                response = await client.post(
+                    url, json={}, timeout=300.0
+                )  # Long timeout for compilation
+            except httpx.RequestError as e:
+                raise RustEnvError(f"HTTP request failed: {e}") from e
             if response.status_code != 200:
-                raise RuntimeError(
+                raise RustEnvError(
                     f"cargo run failed ({response.status_code}): {response.text}"
                 )
             try:
                 data = CommandOutput.model_validate(response.json())
             except (ValueError, ValidationError) as e:
-                raise RuntimeError(
+                raise RustEnvError(
                     f"cargo run returned invalid format ({response.status_code}): {response.text}"
                 ) from e
 
@@ -116,14 +125,17 @@ class RustCodingEnvironment(DockerRuntime):
         """
         url = f"http://localhost:{self.host_port}/str_replace"
         async with httpx.AsyncClient() as client:
-            response = await client.post(
-                url, json={"old_str": old_str, "new_str": new_str}, timeout=10.0
-            )
+            try:
+                response = await client.post(
+                    url, json={"old_str": old_str, "new_str": new_str}, timeout=10.0
+                )
+            except httpx.RequestError as e:
+                raise RustEnvError(f"HTTP request failed: {e}") from e
 
             try:
                 data = CommandOutput.model_validate(response.json())
             except ValidationError as e:
-                raise RuntimeError(
+                raise RustEnvError(
                     f"str_replace returned invalid format ({response.status_code}): {response.text}"
                 ) from e
 
@@ -132,7 +144,7 @@ class RustCodingEnvironment(DockerRuntime):
                 return data.output, success
 
             if response.status_code != 200:
-                raise RuntimeError(
+                raise RustEnvError(
                     f"str_replace failed ({response.status_code}): {response.text}"
                 )
 
@@ -150,16 +162,19 @@ class RustCodingEnvironment(DockerRuntime):
             payload["end_line"] = end_line
 
         async with httpx.AsyncClient() as client:
-            response = await client.post(url, json=payload, timeout=10.0)
+            try:
+                response = await client.post(url, json=payload, timeout=10.0)
+            except httpx.RequestError as e:
+                raise RustEnvError(f"HTTP request failed: {e}") from e
             if response.status_code != 200:
-                raise RuntimeError(
+                raise RustEnvError(
                     f"view_file failed ({response.status_code}): {response.text}"
                 )
             try:
                 data = CommandOutput.model_validate(response.json())
                 return data.output
             except ValidationError as e:
-                raise RuntimeError(
+                raise RustEnvError(
                     f"view_file returned invalid format ({response.status_code}): {response.text}"
                 ) from e
 
@@ -169,15 +184,18 @@ class RustCodingEnvironment(DockerRuntime):
         payload = {"path": path, "content": content}
 
         async with httpx.AsyncClient() as client:
-            response = await client.post(url, json=payload, timeout=10.0)
+            try:
+                response = await client.post(url, json=payload, timeout=10.0)
+            except httpx.RequestError as e:
+                raise RustEnvError(f"HTTP request failed: {e}") from e
             if response.status_code != 200:
-                raise RuntimeError(
+                raise RustEnvError(
                     f"set_content failed ({response.status_code}): {response.text}"
                 )
             try:
                 data = CommandOutput.model_validate(response.json())
                 return data.output
             except ValidationError as e:
-                raise RuntimeError(
+                raise RustEnvError(
                     f"set_content returned invalid format ({response.status_code}): {response.text}"
                 ) from e
