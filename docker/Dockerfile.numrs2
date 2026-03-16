@@ -64,7 +64,7 @@ WORKDIR /workspace
 RUN cargo init
 
 # Add numrs2 dependency
-RUN cargo add numrs2
+RUN cargo add numrs2@0.1.1
 
 # Build the project to cache dependencies
 RUN cargo build

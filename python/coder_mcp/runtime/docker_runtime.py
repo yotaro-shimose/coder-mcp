@@ -1,18 +1,14 @@
-import logging
 import asyncio
+import logging
 import uuid
 from pathlib import Path
 from typing import Dict, List, Optional, Self, override
 
-from agents.mcp import MCPServerStreamableHttp
+import docker
+import docker.errors
 
 from coder_mcp.runtime import Runtime
 from coder_mcp.utils import chmod_recursive
-from coder_mcp.types import CoderToolName
-
-import docker
-import docker.errors
-import httpx
 
 logger = logging.getLogger(__name__)
 
@@ -32,6 +28,8 @@ class DockerRuntime(Runtime):
                 result = await agent.run("Create hello.py")
                 # Files will be saved to /path/to/my/project
     """
+
+    _mcp_name = "Docker MCP Server"
 
     def __init__(
         self,
@@ -151,7 +149,6 @@ class DockerRuntime(Runtime):
         )
 
         # If host_port was not specified, find what Docker assigned
-        # If host_port was not specified, find what Docker assigned
         if not self.host_port:
             # Give Docker a moment to set up port mappings
             await asyncio.sleep(0.5)
@@ -194,69 +191,13 @@ class DockerRuntime(Runtime):
             logger.debug("👋 Container stopped.")
 
     @override
-    def coder_mcp(
-        self,
-        allowed_tool_names: list[CoderToolName] | None = None,
-        blocked_tool_names: list[CoderToolName] | None = None,
-    ) -> MCPServerStreamableHttp:
-        mcp_url = f"http://localhost:{self.host_port}/mcp"
-        tool_filter = {}
-        if allowed_tool_names:
-            tool_filter["allowed_tool_names"] = allowed_tool_names
-        if blocked_tool_names:
-            tool_filter["blocked_tool_names"] = blocked_tool_names
+    def get_api_url(self) -> str:
+        return f"http://localhost:{self.host_port}"
 
-        return MCPServerStreamableHttp(
-            name="Docker MCP Server",
-            params={
-                "url": mcp_url,
-                "timeout": 15,
-            },
-            tool_filter=tool_filter,  # type: ignore
-            cache_tools_list=True,
-            # Allow long-running commands (e.g., cargo build, rustup) up to 5 minutes
-            client_session_timeout_seconds=300,
-        )
-
-    @override
-    def coder_mcp_readonly(self) -> MCPServerStreamableHttp:
-        return self.coder_mcp(
-            allowed_tool_names=[
-                "view_file",
-                "list_directory",
-                "search_filenames",
-                "search_content",
-            ]
-        )
-
-    @override
-    async def tree(
-        self,
-        path: str = ".",
-        exclude: list[str] | None = None,
-        truncate: int = 10,
-    ) -> str:
-
-        params = {"path": path, "truncate": str(truncate)}
-        if exclude:
-            params["exclude"] = ",".join(exclude)
-
-        url = f"http://localhost:{self.host_port}/tree"
-
-        async with httpx.AsyncClient() as client:
-            try:
-                response = await client.get(url, params=params, timeout=5.0)
-                response.raise_for_status()
-                return response.text
-            except Exception as e:
-                return f"Error fetching tree structure: {e}"
-
-    async def _wait_for_health(self, url: str | None = None, timeout: float = 30.0):
-        """Wait for the server to respond to health checks."""
-        if url is None:
-            url = f"http://localhost:{self.host_port}/health"
+    async def _wait_for_health(self, timeout: float = 60.0):
+        """Wait for health, with Docker-specific error logging on failure."""
         try:
-            await super()._wait_for_health(url, timeout)
+            await super()._wait_for_health(timeout)
         except RuntimeError as e:
             # If it timed out, try to get logs for debugging.
             if self._container:

@@ -1,13 +1,10 @@
-from typing import override
-from typing import Self
 import socket
-from typing import Any
+from typing import Any, Self, override
 
 from agents.mcp import MCPServerStreamableHttp
 
 from coder_mcp import CServer
 from coder_mcp.runtime.runtime import Runtime
-from coder_mcp.types import CoderToolName
 
 
 class LocalRuntime(Runtime):
@@ -23,6 +20,9 @@ class LocalRuntime(Runtime):
                 pass
     """
 
+    _mcp_cache_tools = False
+    _mcp_session_timeout = None
+
     def __init__(
         self,
         workdir: str,
@@ -36,7 +36,6 @@ class LocalRuntime(Runtime):
         """
         self.workdir = workdir
         self.port = port
-        self.url = ""
         self._server: CServer | None = None
 
     def _find_free_port(self) -> int:
@@ -50,10 +49,9 @@ class LocalRuntime(Runtime):
         if self.port is None:
             self.port = self._find_free_port()
 
-        self.url = f"http://localhost:{self.port}/mcp"
         self._server = CServer()
         await self._server.start(self.workdir, self.port)
-        await self._wait_for_health(f"http://localhost:{self.port}/health")
+        await self._wait_for_health()
         return self
 
     @override
@@ -63,36 +61,8 @@ class LocalRuntime(Runtime):
             await self._server.stop()
 
     @override
-    def coder_mcp(
-        self,
-        allowed_tool_names: list[CoderToolName] | None = None,
-        blocked_tool_names: list[CoderToolName] | None = None,
-    ) -> MCPServerStreamableHttp:
-        tool_filter = {}
-        if allowed_tool_names:
-            tool_filter["allowed_tool_names"] = allowed_tool_names
-        if blocked_tool_names:
-            tool_filter["blocked_tool_names"] = blocked_tool_names
-
-        return MCPServerStreamableHttp(
-            name="Local MCP Server",
-            params={
-                "url": self.url,
-            },
-            tool_filter=tool_filter,  # type: ignore
-            cache_tools_list=False,
-        )
-
-    @override
-    def coder_mcp_readonly(self) -> MCPServerStreamableHttp:
-        return self.coder_mcp(
-            allowed_tool_names=[
-                "view_file",
-                "list_directory",
-                "search_filenames",
-                "search_content",
-            ]
-        )
+    def get_api_url(self) -> str:
+        return f"http://localhost:{self.port}"
 
     @override
     def coder_mcp_simplified(self) -> MCPServerStreamableHttp:
