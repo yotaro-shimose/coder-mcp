@@ -292,4 +292,4 @@ class Runtime(ABC):
             logger.error(
                 f"Unexpected error to acccess to {health_url}: {type(e)}, {str(e)}"
             )
-            raise RuntimeError(f"Unexpected error: {e}")
+            raise RuntimeError(f"Unexpected error: {e}") from e
