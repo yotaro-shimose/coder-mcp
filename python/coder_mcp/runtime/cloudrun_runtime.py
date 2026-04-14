@@ -139,6 +139,7 @@ class CloudRunRuntime(Runtime):
                     ),
                 ],
                 max_instance_request_concurrency=1,
+                scaling=run_v2.RevisionScaling(max_instance_count=1),
             ),
         )
 
