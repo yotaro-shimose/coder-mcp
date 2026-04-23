@@ -1,4 +1,4 @@
-use crate::models::{BashEvent, ExecuteBashRequest};
+use crate::models::ExecuteBashRequest;
 use crate::runtime::bash::BashEventService;
 use rmcp::{
     handler::server::{router::tool::ToolRouter, wrapper::Parameters},
@@ -7,11 +7,8 @@ use rmcp::{
     service::RequestContext,
     tool, tool_handler, tool_router, ErrorData as McpError, RoleServer, ServerHandler,
 };
-use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
-use tokio::sync::Mutex;
-use tokio::time::{sleep, Duration};
 
 use crate::tools::file_tools::*;
 use crate::tools::glob::{run_glob, GlobArgs};
@@ -21,7 +18,6 @@ use crate::tools::grep::{run_grep, GrepArgs};
 pub struct CoderMcpService {
     bash: Arc<BashEventService>,
     workspace_dir: PathBuf,
-    editor_history: Arc<Mutex<HashMap<PathBuf, Vec<String>>>>,
     tool_router: ToolRouter<CoderMcpService>,
     truncation_limit: usize,
 }
@@ -73,11 +69,6 @@ pub struct DeleteFileArgs {
 }
 
 #[derive(serde::Deserialize, schemars::JsonSchema)]
-pub struct UndoEditArgs {
-    pub path: String,
-}
-
-#[derive(serde::Deserialize, schemars::JsonSchema)]
 pub struct TreeArgs {
     #[serde(default)]
     pub path: Option<String>,
@@ -94,7 +85,6 @@ impl CoderMcpService {
         Self {
             bash: Arc::new(bash),
             workspace_dir,
-            editor_history: Arc::new(Mutex::new(HashMap::new())),
             tool_router: Self::tool_router(),
             truncation_limit,
         }
@@ -158,47 +148,37 @@ impl CoderMcpService {
             timeout: args.timeout,
         };
 
-        let cmd = self.bash.start_bash_command(req);
+        let (cmd, rx) = self.bash.start_bash_command(req);
         tracing::info!("Started bash command with ID: {}", cmd.id);
 
-        // Simple polling loop
-        let mut attempts = 0;
-        loop {
-            sleep(Duration::from_millis(100)).await;
-            let page = self.bash.search_bash_events(Some(cmd.id));
-            if let Some(last_item) = page.items.last() {
-                if let BashEvent::BashOutput(out) = last_item {
-                    // Combine stdout and stderr
-                    let mut result_str = String::new();
-                    if let Some(stdout) = &out.stdout {
-                        result_str.push_str(stdout);
-                    }
-                    if let Some(stderr) = &out.stderr {
-                        if !result_str.is_empty() {
-                            result_str.push('\n');
-                        }
-                        result_str.push_str(stderr);
-                    }
-                    if let Some(exit_code) = out.exit_code {
-                        if !result_str.is_empty() {
-                            result_str.push('\n');
-                        }
-                        result_str
-                            .push_str(&format!("[Command finished with exit code {}]", exit_code));
-                    }
-                    return Ok(CallToolResult::success(vec![Content::text(self.truncate_output(result_str))]));
-                }
-            }
+        let out = rx.await.map_err(|_| McpError {
+            code: ErrorCode(0),
+            message: "Bash execution task ended without sending result"
+                .to_string()
+                .into(),
+            data: None,
+        })?;
 
-            attempts += 1;
-            if attempts > 3000 {
-                return Err(McpError {
-                    code: ErrorCode(0),
-                    message: "Polling timed out".to_string().into(),
-                    data: None,
-                });
-            }
+        let mut result_str = String::new();
+        if let Some(stdout) = &out.stdout {
+            result_str.push_str(stdout);
         }
+        if let Some(stderr) = &out.stderr {
+            if !result_str.is_empty() {
+                result_str.push('\n');
+            }
+            result_str.push_str(stderr);
+        }
+        if let Some(exit_code) = out.exit_code {
+            if !result_str.is_empty() {
+                result_str.push('\n');
+            }
+            result_str.push_str(&format!("[Command finished with exit code {}]", exit_code));
+        }
+
+        Ok(CallToolResult::success(vec![Content::text(
+            self.truncate_output(result_str),
+        )]))
     }
 
     #[tool(
@@ -245,7 +225,7 @@ impl CoderMcpService {
         &self,
         Parameters(args): Parameters<StrReplaceArgs>,
     ) -> Result<CallToolResult, McpError> {
-        let output = run_str_replace(&args, &self.workspace_dir, &self.editor_history).await?;
+        let output = run_str_replace(&args, &self.workspace_dir).await?;
         Ok(CallToolResult::success(vec![Content::text(self.truncate_output(output))]))
     }
 
@@ -257,7 +237,7 @@ impl CoderMcpService {
         &self,
         Parameters(args): Parameters<InsertLinesArgs>,
     ) -> Result<CallToolResult, McpError> {
-        let output = run_insert_lines(&args, &self.workspace_dir, &self.editor_history).await?;
+        let output = run_insert_lines(&args, &self.workspace_dir).await?;
         Ok(CallToolResult::success(vec![Content::text(self.truncate_output(output))]))
     }
 
@@ -270,18 +250,6 @@ impl CoderMcpService {
         Parameters(args): Parameters<DeleteFileArgs>,
     ) -> Result<CallToolResult, McpError> {
         let output = run_delete_file(&args, &self.workspace_dir).await?;
-        Ok(CallToolResult::success(vec![Content::text(self.truncate_output(output))]))
-    }
-
-    #[tool(
-        name = "undo_edit",
-        description = "Revert the last edit made to a file (from str_replace or insert_lines)."
-    )]
-    async fn undo_edit(
-        &self,
-        Parameters(args): Parameters<UndoEditArgs>,
-    ) -> Result<CallToolResult, McpError> {
-        let output = run_undo_edit(&args, &self.workspace_dir, &self.editor_history).await?;
         Ok(CallToolResult::success(vec![Content::text(self.truncate_output(output))]))
     }
 }

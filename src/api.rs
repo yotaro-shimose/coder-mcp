@@ -1,20 +1,24 @@
-use crate::models::{BashEvent, ExecuteBashRequest};
-use crate::runtime::bash::BashEventService;
 use crate::service::StrReplaceArgs;
 use crate::tools::file_tools::{run_str_replace, run_view_file, ViewFileArgs};
 use axum::{extract::State, http::StatusCode, response::IntoResponse, Json};
 use serde::{Deserialize, Serialize};
-use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
-use tokio::sync::Mutex;
-use tokio::time::{sleep, Duration};
+use std::time::Duration;
+use tokio::process::Command;
+use tokio::time::timeout;
+
+/// REST handlers are intentionally stateless: each request spawns its own
+/// `cargo run` subprocess and the file-editing handlers go through `std::fs`
+/// directly. They do NOT share the PTY-backed `TerminalSession` that the
+/// MCP `bash` tool uses, because a hung PTY session would otherwise stall
+/// every subsequent `/run` request up to the 5-minute timeout. MCP side
+/// (service.rs) still uses the stateful terminal for its `bash` tool.
+const RUN_TIMEOUT: Duration = Duration::from_secs(270);
 
 #[derive(Clone)]
 pub struct AppState {
-    pub bash: Arc<BashEventService>,
     pub workspace_dir: PathBuf,
-    pub editor_history: Arc<Mutex<HashMap<PathBuf, Vec<String>>>>,
     pub truncation_limit: usize,
 }
 
@@ -76,59 +80,64 @@ pub async fn run_handler(
     Json(_payload): Json<RunPayload>,
 ) -> impl IntoResponse {
     tracing::info!("Executing cargo run (REST)");
-    let req = ExecuteBashRequest {
-        command: "cargo run".to_string(),
-        cwd: None,
-        timeout: None,
-    };
 
-    let cmd = state.bash.start_bash_command(req);
-    tracing::info!("Started cargo run with ID: {}", cmd.id);
+    let mut cmd = Command::new("cargo");
+    cmd.arg("run")
+        .current_dir(&state.workspace_dir)
+        .kill_on_drop(true);
 
-    let mut attempts = 0;
-    loop {
-        sleep(Duration::from_millis(100)).await;
-        let page = state.bash.search_bash_events(Some(cmd.id));
-        if let Some(last_item) = page.items.last() {
-            if let BashEvent::BashOutput(out) = last_item {
-                let mut result_str = String::new();
-                if let Some(stdout) = &out.stdout {
-                    result_str.push_str(stdout);
-                }
-                if let Some(stderr) = &out.stderr {
-                    if !result_str.is_empty() {
-                        result_str.push('\n');
-                    }
-                    result_str.push_str(stderr);
-                }
-                if let Some(exit_code) = out.exit_code {
-                    if !result_str.is_empty() {
-                        result_str.push('\n');
-                    }
-                    result_str
-                        .push_str(&format!("[Command finished with exit code {}]", exit_code));
-                }
-                return (
-                    StatusCode::OK,
-                    Json(CommandOutput {
-                        output: truncate_output(result_str, state.truncation_limit),
-                        exit_code: out.exit_code,
-                    }),
-                );
-            }
-        }
-
-        attempts += 1;
-        if attempts > 3000 {
+    let spawn_future = cmd.output();
+    let result = match timeout(RUN_TIMEOUT, spawn_future).await {
+        Ok(Ok(out)) => out,
+        Ok(Err(e)) => {
             return (
-                StatusCode::GATEWAY_TIMEOUT,
+                StatusCode::INTERNAL_SERVER_ERROR,
                 Json(CommandOutput {
-                    output: "Polling timed out".to_string(),
+                    output: format!("Failed to spawn `cargo run`: {e}"),
                     exit_code: None,
                 }),
             );
         }
+        Err(_) => {
+            // kill_on_drop takes care of the child process when the future
+            // returned by Command::output is dropped on timeout.
+            let msg = format!(
+                "[cargo run timed out after {}s]",
+                RUN_TIMEOUT.as_secs()
+            );
+            return (
+                StatusCode::OK,
+                Json(CommandOutput {
+                    output: msg,
+                    exit_code: Some(-1),
+                }),
+            );
+        }
+    };
+
+    let exit_code = result.status.code();
+    let mut output = String::from_utf8_lossy(&result.stdout).into_owned();
+    let stderr = String::from_utf8_lossy(&result.stderr);
+    if !stderr.is_empty() {
+        if !output.is_empty() {
+            output.push('\n');
+        }
+        output.push_str(&stderr);
     }
+    if let Some(code) = exit_code {
+        if !output.is_empty() {
+            output.push('\n');
+        }
+        output.push_str(&format!("[Command finished with exit code {}]", code));
+    }
+
+    (
+        StatusCode::OK,
+        Json(CommandOutput {
+            output: truncate_output(output, state.truncation_limit),
+            exit_code,
+        }),
+    )
 }
 
 pub async fn str_replace_handler(
@@ -141,7 +150,7 @@ pub async fn str_replace_handler(
         new_str: payload.new_str,
     };
 
-    match run_str_replace(&full_args, &state.workspace_dir, &state.editor_history).await {
+    match run_str_replace(&full_args, &state.workspace_dir).await {
         Ok(output) => (
             StatusCode::OK,
             Json(CommandOutput {
@@ -193,20 +202,13 @@ pub async fn set_content_handler(
 ) -> impl IntoResponse {
     let path = state.workspace_dir.join(&payload.path);
 
-    // Save history if the file already exists
-    if path.exists() {
-        if let Ok(content) = std::fs::read_to_string(&path) {
-            let mut history = state.editor_history.lock().await;
-            history
-                .entry(path.clone())
-                .or_default()
-                .push(content);
+    if !tokio::fs::try_exists(&path).await.unwrap_or(false) {
+        if let Some(parent) = path.parent() {
+            let _ = tokio::fs::create_dir_all(parent).await;
         }
-    } else if let Some(parent) = path.parent() {
-        let _ = std::fs::create_dir_all(parent);
     }
 
-    match std::fs::write(&path, &payload.content) {
+    match tokio::fs::write(&path, &payload.content).await {
         Ok(_) => (
             StatusCode::OK,
             Json(CommandOutput {

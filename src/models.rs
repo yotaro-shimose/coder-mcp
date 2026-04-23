@@ -10,22 +10,6 @@ pub struct ExecuteBashRequest {
 }
 
 #[derive(Serialize, Deserialize, Debug, Clone)]
-#[serde(tag = "kind")]
-pub enum BashEvent {
-    BashCommand(BashCommand),
-    BashOutput(BashOutput),
-}
-
-impl BashEvent {
-    pub fn timestamp(&self) -> DateTime<Utc> {
-        match self {
-            BashEvent::BashCommand(c) => c.timestamp,
-            BashEvent::BashOutput(o) => o.timestamp,
-        }
-    }
-}
-
-#[derive(Serialize, Deserialize, Debug, Clone)]
 pub struct BashCommand {
     pub id: Uuid,
     pub timestamp: DateTime<Utc>,
@@ -43,10 +27,4 @@ pub struct BashOutput {
     pub exit_code: Option<i32>,
     pub stdout: Option<String>,
     pub stderr: Option<String>,
-}
-
-#[derive(Serialize, Deserialize, Debug, Clone)]
-pub struct BashEventPage {
-    pub items: Vec<BashEvent>,
-    pub next_page_id: Option<String>,
 }

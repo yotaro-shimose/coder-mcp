@@ -8,10 +8,8 @@ use rmcp::transport::{
     StreamableHttpServerConfig,
     streamable_http_server::{session::local::LocalSessionManager, tower::StreamableHttpService},
 };
-use std::collections::HashMap;
 use std::path::PathBuf;
 use std::sync::Arc;
-use tokio::sync::Mutex;
 use tokio::net::TcpListener;
 
 pub async fn run_server(
@@ -23,8 +21,7 @@ pub async fn run_server(
     // Set up tracing using the local logger
     logger::init_logging();
 
-    let cwd = std::env::current_dir().unwrap();
-    let bash_service = BashEventService::new(cwd.join(".coder_mcp"), Some(workspace_path.clone()));
+    let bash_service = BashEventService::new(Some(workspace_path.clone()));
 
     // Create the full MCP service
     let limit = truncation_limit.unwrap_or(20000);
@@ -38,11 +35,11 @@ pub async fn run_server(
             StreamableHttpServerConfig::default(),
         );
 
-    // Create shared state for REST API
+    // Create shared state for REST API. Note: `bash_service` is consumed only
+    // by the MCP side (CoderMcpService) — REST handlers spawn `cargo run` as
+    // a fresh subprocess per request to avoid PTY session hangs.
     let state = Arc::new(AppState {
-        bash: Arc::new(bash_service), // Cloning here probably
         workspace_dir: workspace_path.clone(),
-        editor_history: Arc::new(Mutex::new(HashMap::new())),
         truncation_limit: limit,
     });
 

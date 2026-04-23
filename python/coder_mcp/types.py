@@ -8,7 +8,6 @@ CoderToolName = Literal[
     "str_replace",
     "insert_lines",
     "delete_file",
-    "undo_edit",
     "search_filenames",
     "search_content",
 ]

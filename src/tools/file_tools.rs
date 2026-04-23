@@ -1,16 +1,14 @@
 use rmcp::ErrorData as McpError;
 use rmcp::model::ErrorCode;
-use std::collections::HashMap;
 use std::fs;
-use std::path::{Path, PathBuf};
-use tokio::sync::Mutex;
+use std::path::Path;
 
 use crate::tools::utils;
 
 // Re-export argument types from service
 pub use crate::service::{
     CreateFileArgs, DeleteFileArgs, InsertLinesArgs, ListDirectoryArgs, StrReplaceArgs,
-    TreeArgs, UndoEditArgs, ViewFileArgs,
+    TreeArgs, ViewFileArgs,
 };
 
 const SNIPPET_CONTEXT_WINDOW: usize = 4;
@@ -180,7 +178,6 @@ pub async fn run_create_file(
 pub async fn run_str_replace(
     args: &StrReplaceArgs,
     workspace_dir: &Path,
-    editor_history: &Mutex<HashMap<PathBuf, Vec<String>>>,
 ) -> Result<String, McpError> {
     let path = workspace_dir.join(&args.path);
 
@@ -235,15 +232,6 @@ pub async fn run_str_replace(
         &content[idx + matched_text.len()..]
     );
 
-    // Save history
-    {
-        let mut history = editor_history.lock().await;
-        history
-            .entry(path.clone())
-            .or_default()
-            .push(content.clone());
-    }
-
     fs::write(&path, &new_content).map_err(|e| McpError {
         code: ErrorCode(-32603),
         message: format!("Failed to write file: {}", e).into(),
@@ -280,7 +268,6 @@ pub async fn run_str_replace(
 pub async fn run_insert_lines(
     args: &InsertLinesArgs,
     workspace_dir: &Path,
-    editor_history: &Mutex<HashMap<PathBuf, Vec<String>>>,
 ) -> Result<String, McpError> {
     let path = workspace_dir.join(&args.path);
 
@@ -301,15 +288,6 @@ pub async fn run_insert_lines(
             ));
         }
     };
-
-    // Save history
-    {
-        let mut history = editor_history.lock().await;
-        history
-            .entry(path.clone())
-            .or_default()
-            .push(content.clone());
-    }
 
     let mut lines: Vec<String> = content.lines().map(|s| s.to_string()).collect();
     let idx = (args.insert_line as usize).saturating_sub(1);
@@ -387,36 +365,6 @@ pub async fn run_delete_file(
     Ok(format!("File deleted successfully: {}", path.display()))
 }
 
-pub async fn run_undo_edit(
-    args: &UndoEditArgs,
-    workspace_dir: &Path,
-    editor_history: &Mutex<HashMap<PathBuf, Vec<String>>>,
-) -> Result<String, McpError> {
-    let path = workspace_dir.join(&args.path);
-
-    let mut history = editor_history.lock().await;
-    if let Some(versions) = history.get_mut(&path) {
-        if let Some(prev_content) = versions.pop() {
-            if let Err(e) = fs::write(&path, &prev_content) {
-                return Ok(format!(
-                    "Error: Failed to restore file {}: {}",
-                    path.display(),
-                    e
-                ));
-            }
-            return Ok(format!(
-                "Last edit to {} undone successfully. {}",
-                path.display(),
-                make_output(&prev_content, &path.to_string_lossy(), 1)
-            ));
-        }
-    }
-    Ok(format!(
-        "Error: No edit history found for {}",
-        path.display()
-    ))
-}
-
 #[cfg(test)]
 mod tests {
     use super::*;
@@ -427,7 +375,6 @@ mod tests {
     #[tokio::test]
     async fn test_str_replace_basic() {
         let dir = tempdir().unwrap();
-        let history = Mutex::new(HashMap::new());
         let file_path = dir.path().join("test.txt");
         fs::write(&file_path, "hello world").unwrap();
 
@@ -437,7 +384,7 @@ mod tests {
             new_str: "rust".to_string(),
         };
 
-        let result = run_str_replace(&args, dir.path(), &history).await;
+        let result = run_str_replace(&args, dir.path()).await;
         assert!(result.is_ok());
 
         let content = fs::read_to_string(&file_path).unwrap();
@@ -447,7 +394,6 @@ mod tests {
     #[tokio::test]
     async fn test_str_replace_not_found() {
         let dir = tempdir().unwrap();
-        let history = Mutex::new(HashMap::new());
         let file_path = dir.path().join("test.txt");
         fs::write(&file_path, "hello world").unwrap();
 
@@ -457,7 +403,7 @@ mod tests {
             new_str: "replacement".to_string(),
         };
 
-        let result = run_str_replace(&args, dir.path(), &history).await;
+        let result = run_str_replace(&args, dir.path()).await;
         assert!(result.is_ok());
         let output = result.unwrap();
         assert!(output.contains("Error"));
@@ -467,7 +413,6 @@ mod tests {
     #[tokio::test]
     async fn test_str_replace_multiple_occurrences() {
         let dir = tempdir().unwrap();
-        let history = Mutex::new(HashMap::new());
         let file_path = dir.path().join("test.txt");
         fs::write(&file_path, "hello hello hello").unwrap();
 
@@ -477,7 +422,7 @@ mod tests {
             new_str: "world".to_string(),
         };
 
-        let result = run_str_replace(&args, dir.path(), &history).await;
+        let result = run_str_replace(&args, dir.path()).await;
         assert!(result.is_ok());
         let output = result.unwrap();
         assert!(output.contains("Error"));
@@ -487,7 +432,6 @@ mod tests {
     #[tokio::test]
     async fn test_str_replace_same_string() {
         let dir = tempdir().unwrap();
-        let history = Mutex::new(HashMap::new());
         let file_path = dir.path().join("test.txt");
         fs::write(&file_path, "hello world").unwrap();
 
@@ -497,7 +441,7 @@ mod tests {
             new_str: "world".to_string(),
         };
 
-        let result = run_str_replace(&args, dir.path(), &history).await;
+        let result = run_str_replace(&args, dir.path()).await;
         assert!(result.is_ok());
         let output = result.unwrap();
         assert!(output.contains("Error"));
@@ -507,7 +451,6 @@ mod tests {
     #[tokio::test]
     async fn test_str_replace_file_not_found() {
         let dir = tempdir().unwrap();
-        let history = Mutex::new(HashMap::new());
 
         let args = StrReplaceArgs {
             path: "nonexistent.txt".to_string(),
@@ -515,7 +458,7 @@ mod tests {
             new_str: "new".to_string(),
         };
 
-        let result = run_str_replace(&args, dir.path(), &history).await;
+        let result = run_str_replace(&args, dir.path()).await;
         assert!(result.is_ok());
         let output = result.unwrap();
         assert!(output.contains("Error"));
@@ -525,7 +468,6 @@ mod tests {
     #[tokio::test]
     async fn test_str_replace_multiline() {
         let dir = tempdir().unwrap();
-        let history = Mutex::new(HashMap::new());
         let file_path = dir.path().join("test.txt");
         fs::write(&file_path, "line1\nline2\nline3").unwrap();
 
@@ -535,7 +477,7 @@ mod tests {
             new_str: "modified".to_string(),
         };
 
-        let result = run_str_replace(&args, dir.path(), &history).await;
+        let result = run_str_replace(&args, dir.path()).await;
         assert!(result.is_ok());
 
         let content = fs::read_to_string(&file_path).unwrap();
@@ -718,7 +660,6 @@ mod tests {
     #[tokio::test]
     async fn test_insert_lines_basic() {
         let dir = tempdir().unwrap();
-        let history = Mutex::new(HashMap::new());
         let file_path = dir.path().join("test.txt");
         fs::write(&file_path, "line1\nline2\nline3").unwrap();
 
@@ -728,7 +669,7 @@ mod tests {
             content: "inserted".to_string(),
         };
 
-        let result = run_insert_lines(&args, dir.path(), &history).await;
+        let result = run_insert_lines(&args, dir.path()).await;
         assert!(result.is_ok());
 
         let content = fs::read_to_string(&file_path).unwrap();
@@ -741,7 +682,6 @@ mod tests {
     #[tokio::test]
     async fn test_insert_lines_at_beginning() {
         let dir = tempdir().unwrap();
-        let history = Mutex::new(HashMap::new());
         let file_path = dir.path().join("test.txt");
         fs::write(&file_path, "line1\nline2").unwrap();
 
@@ -751,7 +691,7 @@ mod tests {
             content: "first".to_string(),
         };
 
-        let result = run_insert_lines(&args, dir.path(), &history).await;
+        let result = run_insert_lines(&args, dir.path()).await;
         assert!(result.is_ok());
 
         let content = fs::read_to_string(&file_path).unwrap();
@@ -763,7 +703,6 @@ mod tests {
     #[tokio::test]
     async fn test_insert_lines_at_end() {
         let dir = tempdir().unwrap();
-        let history = Mutex::new(HashMap::new());
         let file_path = dir.path().join("test.txt");
         fs::write(&file_path, "line1\nline2").unwrap();
 
@@ -773,7 +712,7 @@ mod tests {
             content: "last".to_string(),
         };
 
-        let result = run_insert_lines(&args, dir.path(), &history).await;
+        let result = run_insert_lines(&args, dir.path()).await;
         assert!(result.is_ok());
 
         let content = fs::read_to_string(&file_path).unwrap();
@@ -784,7 +723,6 @@ mod tests {
     #[tokio::test]
     async fn test_insert_lines_invalid_line() {
         let dir = tempdir().unwrap();
-        let history = Mutex::new(HashMap::new());
         let file_path = dir.path().join("test.txt");
         fs::write(&file_path, "line1\nline2").unwrap();
 
@@ -794,7 +732,7 @@ mod tests {
             content: "invalid".to_string(),
         };
 
-        let result = run_insert_lines(&args, dir.path(), &history).await;
+        let result = run_insert_lines(&args, dir.path()).await;
         assert!(result.is_ok());
         let output = result.unwrap();
         assert!(output.contains("Error"));
@@ -804,7 +742,6 @@ mod tests {
     #[tokio::test]
     async fn test_insert_lines_file_not_found() {
         let dir = tempdir().unwrap();
-        let history = Mutex::new(HashMap::new());
 
         let args = InsertLinesArgs {
             path: "nonexistent.txt".to_string(),
@@ -812,7 +749,7 @@ mod tests {
             content: "content".to_string(),
         };
 
-        let result = run_insert_lines(&args, dir.path(), &history).await;
+        let result = run_insert_lines(&args, dir.path()).await;
         assert!(result.is_ok());
         let output = result.unwrap();
         assert!(output.contains("Error"));
@@ -850,129 +787,6 @@ mod tests {
         let output = result.unwrap();
         assert!(output.contains("Error"));
         assert!(output.contains("does not exist"));
-    }
-
-    // ========== undo_edit tests ==========
-
-    #[tokio::test]
-    async fn test_undo_edit_after_str_replace() {
-        let dir = tempdir().unwrap();
-        let history = Mutex::new(HashMap::new());
-        let file_path = dir.path().join("test.txt");
-        fs::write(&file_path, "hello world").unwrap();
-
-        // First, do a str_replace
-        let replace_args = StrReplaceArgs {
-            path: "test.txt".to_string(),
-            old_str: "world".to_string(),
-            new_str: "rust".to_string(),
-        };
-        run_str_replace(&replace_args, dir.path(), &history)
-            .await
-            .unwrap();
-
-        let content = fs::read_to_string(&file_path).unwrap();
-        assert_eq!(content, "hello rust");
-
-        // Now undo
-        let undo_args = UndoEditArgs {
-            path: "test.txt".to_string(),
-        };
-        let result = run_undo_edit(&undo_args, dir.path(), &history).await;
-        assert!(result.is_ok());
-
-        let content = fs::read_to_string(&file_path).unwrap();
-        assert_eq!(content, "hello world");
-    }
-
-    #[tokio::test]
-    async fn test_undo_edit_after_insert_lines() {
-        let dir = tempdir().unwrap();
-        let history = Mutex::new(HashMap::new());
-        let file_path = dir.path().join("test.txt");
-        fs::write(&file_path, "line1\nline2").unwrap();
-
-        // Insert a line
-        let insert_args = InsertLinesArgs {
-            path: "test.txt".to_string(),
-            insert_line: 2,
-            content: "inserted".to_string(),
-        };
-        run_insert_lines(&insert_args, dir.path(), &history)
-            .await
-            .unwrap();
-
-        // Undo
-        let undo_args = UndoEditArgs {
-            path: "test.txt".to_string(),
-        };
-        let result = run_undo_edit(&undo_args, dir.path(), &history).await;
-        assert!(result.is_ok());
-
-        let content = fs::read_to_string(&file_path).unwrap();
-        assert_eq!(content, "line1\nline2");
-    }
-
-    #[tokio::test]
-    async fn test_undo_edit_no_history() {
-        let dir = tempdir().unwrap();
-        let history = Mutex::new(HashMap::new());
-        let file_path = dir.path().join("test.txt");
-        fs::write(&file_path, "content").unwrap();
-
-        let undo_args = UndoEditArgs {
-            path: "test.txt".to_string(),
-        };
-        let result = run_undo_edit(&undo_args, dir.path(), &history).await;
-        assert!(result.is_ok());
-        let output = result.unwrap();
-        assert!(output.contains("Error"));
-        assert!(output.contains("No edit history"));
-    }
-
-    #[tokio::test]
-    async fn test_undo_edit_multiple_times() {
-        let dir = tempdir().unwrap();
-        let history = Mutex::new(HashMap::new());
-        let file_path = dir.path().join("test.txt");
-        fs::write(&file_path, "original").unwrap();
-
-        // First edit
-        let replace_args1 = StrReplaceArgs {
-            path: "test.txt".to_string(),
-            old_str: "original".to_string(),
-            new_str: "edit1".to_string(),
-        };
-        run_str_replace(&replace_args1, dir.path(), &history)
-            .await
-            .unwrap();
-
-        // Second edit
-        let replace_args2 = StrReplaceArgs {
-            path: "test.txt".to_string(),
-            old_str: "edit1".to_string(),
-            new_str: "edit2".to_string(),
-        };
-        run_str_replace(&replace_args2, dir.path(), &history)
-            .await
-            .unwrap();
-
-        // Undo once
-        let undo_args = UndoEditArgs {
-            path: "test.txt".to_string(),
-        };
-        run_undo_edit(&undo_args, dir.path(), &history)
-            .await
-            .unwrap();
-        let content = fs::read_to_string(&file_path).unwrap();
-        assert_eq!(content, "edit1");
-
-        // Undo again
-        run_undo_edit(&undo_args, dir.path(), &history)
-            .await
-            .unwrap();
-        let content = fs::read_to_string(&file_path).unwrap();
-        assert_eq!(content, "original");
     }
 
     // ========== list_directory tests ==========
@@ -1096,11 +910,16 @@ pub fn run_tree(
     let max_depth = args.max_depth.unwrap_or(usize::MAX);
     let truncate = args.truncate.unwrap_or(10);
     
-    let exclude_vec: Vec<String> = args.exclude.as_deref().unwrap_or("")
+    let mut exclude_vec: Vec<String> = args.exclude.as_deref().unwrap_or("")
         .split(',')
         .map(|s| s.trim().to_string())
         .filter(|s| !s.is_empty())
         .collect();
+    // Always exclude the Cargo build output dir — it can contain thousands of
+    // files and causes large allocations when enumerated on tmpfs (Cloud Run).
+    if !exclude_vec.iter().any(|s| s == "target") {
+        exclude_vec.push("target".to_string());
+    }
 
     let mut output = String::new();
     // Add root

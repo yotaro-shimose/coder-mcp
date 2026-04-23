@@ -34,23 +34,6 @@ RUN apt-get update && apt-get install -y \
     && curl --proto '=https' --tlsv1.2 -sSf https://sh.rustup.rs | sh -s -- -y --default-toolchain 1.92 --profile minimal \
     && rm -rf /var/lib/apt/lists/*
 
-# Install sccache
-RUN arch=$(uname -m) && \
-    if [ "$arch" = "x86_64" ]; then \
-        url="https://github.com/mozilla/sccache/releases/download/v0.12.0/sccache-v0.12.0-x86_64-unknown-linux-musl.tar.gz"; \
-    elif [ "$arch" = "aarch64" ]; then \
-        url="https://github.com/mozilla/sccache/releases/download/v0.12.0/sccache-v0.12.0-aarch64-unknown-linux-musl.tar.gz"; \
-    fi && \
-    wget -q $url -O sccache.tar.gz \
-    && tar xzf sccache.tar.gz \
-    && mv sccache-v0.12.0-*/sccache /usr/local/bin/sccache \
-    && chmod +x /usr/local/bin/sccache \
-    && rm -rf sccache.tar.gz sccache-v0.12.0-*
-
-# Setup sccache directory
-RUN mkdir -p /var/cache/sccache \
-    && chmod 777 /var/cache/sccache
-
 WORKDIR /app
 
 # Copy the binary from the builder stage
@@ -68,8 +51,6 @@ RUN mkdir -p /root/.cargo && \
 ENV RUST_LOG=info
 ENV PORT=3000
 ENV WORKSPACE_DIR=/workspace
-ENV RUSTC_WRAPPER=/usr/local/bin/sccache
-ENV SCCACHE_DIR=/var/cache/sccache
 ENV CARGO_INCREMENTAL=0
 
 # Expose the API port

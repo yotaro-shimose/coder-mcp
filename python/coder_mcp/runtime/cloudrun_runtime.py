@@ -133,7 +133,7 @@ class CloudRunRuntime(Runtime):
                         image=self.image_uri,
                         ports=[run_v2.ContainerPort(container_port=3000)],
                         resources=run_v2.ResourceRequirements(
-                            limits={"cpu": "1.0", "memory": "2Gi"}, cpu_idle=True
+                            limits={"cpu": "4.0", "memory": "8Gi"}, cpu_idle=True
                         ),
                         env=container_env,
                     ),
