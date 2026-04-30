@@ -42,6 +42,27 @@ push-ecr repo_name="coder-mcp-numrs2":
     
     echo "✅ プッシュおよびSOCIインデックス登録完了: ${FULL_IMAGE_URI}"
 
+# Push docker image to Google Artifact Registry
+# Usage: just push-gar [image_uri="europe-north1-docker.pkg.dev/dsat2-405406/shimose-repo/coder-mcp-numrs2"]
+push-gar image_uri="europe-north1-docker.pkg.dev/dsat2-405406/shimose-repo/coder-mcp-numrs2":
+    #!/usr/bin/env bash
+    set -euo pipefail
+
+    LOCAL_IMAGE="coder-mcp-numrs2:latest"
+    FULL_IMAGE_URI="{{image_uri}}:latest"
+    REGISTRY_HOST="$(echo "{{image_uri}}" | cut -d/ -f1)"
+
+    echo "🔑 Artifact Registry (${REGISTRY_HOST}) 向けに docker credential helper を設定しています..."
+    gcloud auth configure-docker "${REGISTRY_HOST}" --quiet
+
+    echo "🏷️ イメージにタグを付けています: ${LOCAL_IMAGE} -> ${FULL_IMAGE_URI}"
+    docker tag "${LOCAL_IMAGE}" "${FULL_IMAGE_URI}"
+
+    echo "🚀 Artifact Registry へイメージをプッシュしています..."
+    docker push "${FULL_IMAGE_URI}"
+
+    echo "✅ プッシュ完了: ${FULL_IMAGE_URI}"
+
 # Delete Cloud Run services that contain a specific pattern in their name
 # Usage: just delete-cloudrun-services [pattern="coder-mcp-numrs2"] [region="europe-north1"]
 delete-cloudrun-services pattern="coder-mcp-numrs2" region="europe-north1":

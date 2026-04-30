@@ -13,7 +13,8 @@ async def test_tool_filter():
     async with LocalRuntime(workdir=".") as runtime:
         # Test 1: Bash only
         print("\n[Test 1] Connecting with allowed_tool_names=['bash']...")
-        async with runtime.coder_mcp(allowed_tool_names=["bash"]) as client:
+        server = await runtime.coder_mcp(allowed_tool_names=["bash"])
+        async with server as client:
             tools = await client.list_tools()
             # tools is a list of Tool objects
             tool_names = [t.name for t in tools]
@@ -40,7 +41,8 @@ async def test_tool_filter():
 
         # Test 2: Read-only defaults
         print("\n[Test 2] Connecting with coder_mcp_readonly()...")
-        async with runtime.coder_mcp_readonly() as client:
+        server = await runtime.coder_mcp_readonly()
+        async with server as client:
             tools = await client.list_tools()
             tool_names = [t.name for t in tools]
             print(f"Available tools: {tool_names}")

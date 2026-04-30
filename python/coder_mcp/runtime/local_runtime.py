@@ -15,7 +15,8 @@ class LocalRuntime(Runtime):
     Example:
         # Start server: cd coder-mcp && cargo run
         async with LocalRuntime(workdir=".") as runtime:
-            async with runtime.coder_mcp() as server:
+            mcp = await runtime.coder_mcp()
+            async with mcp as server:
                 # use server
                 pass
     """

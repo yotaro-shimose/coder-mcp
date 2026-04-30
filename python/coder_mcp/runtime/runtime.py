@@ -76,15 +76,18 @@ class Runtime(ABC):
         """Get the base URL for the runtime API."""
         pass
 
-    def get_headers(self) -> dict[str, str]:
-        """Get extra HTTP headers required by this runtime (e.g. auth tokens)."""
+    async def get_headers(self) -> dict[str, str]:
+        """Get extra HTTP headers required by this runtime (e.g. auth tokens).
+
+        Async to allow subclasses to fetch/refresh short-lived credentials.
+        """
         return {}
 
     # ------------------------------------------------------------------
     # MCP server creation (concrete, using get_api_url + get_headers)
     # ------------------------------------------------------------------
 
-    def coder_mcp(
+    async def coder_mcp(
         self,
         allowed_tool_names: list[CoderToolName] | None = None,
         blocked_tool_names: list[CoderToolName] | None = None,
@@ -96,7 +99,7 @@ class Runtime(ABC):
         if blocked_tool_names:
             tool_filter["blocked_tool_names"] = blocked_tool_names
 
-        headers = self.get_headers()
+        headers = await self.get_headers()
         params: dict[str, Any] = {"url": mcp_url}
         if self._mcp_timeout:
             params["timeout"] = self._mcp_timeout
@@ -114,8 +117,8 @@ class Runtime(ABC):
 
         return MCPServerStreamableHttp(**kwargs)
 
-    def coder_mcp_readonly(self) -> MCPServerStreamableHttp:
-        return self.coder_mcp(
+    async def coder_mcp_readonly(self) -> MCPServerStreamableHttp:
+        return await self.coder_mcp(
             allowed_tool_names=[
                 "view_file",
                 "list_directory",
@@ -137,7 +140,7 @@ class Runtime(ABC):
         url = f"{self.get_api_url()}/run"
         try:
             response = await self.get_client().post(
-                url, json={}, headers=self.get_headers(), timeout=300.0
+                url, json={}, headers=await self.get_headers(), timeout=300.0
             )
         except httpx.RequestError as e:
             raise CoderMCPRuntimeError(f"HTTP request failed: {e}") from e
@@ -166,7 +169,7 @@ class Runtime(ABC):
             response = await self.get_client().post(
                 url,
                 json={"old_str": old_str, "new_str": new_str},
-                headers=self.get_headers(),
+                headers=await self.get_headers(),
                 timeout=10.0,
             )
         except httpx.RequestError as e:
@@ -203,7 +206,7 @@ class Runtime(ABC):
 
         try:
             response = await self.get_client().post(
-                url, json=payload, headers=self.get_headers(), timeout=10.0
+                url, json=payload, headers=await self.get_headers(), timeout=10.0
             )
         except httpx.RequestError as e:
             raise CoderMCPRuntimeError(f"HTTP request failed: {e}") from e
@@ -226,7 +229,7 @@ class Runtime(ABC):
 
         try:
             response = await self.get_client().post(
-                url, json=payload, headers=self.get_headers(), timeout=10.0
+                url, json=payload, headers=await self.get_headers(), timeout=10.0
             )
         except httpx.RequestError as e:
             raise CoderMCPRuntimeError(f"HTTP request failed: {e}") from e
@@ -254,7 +257,7 @@ class Runtime(ABC):
             params["exclude"] = ",".join(exclude)
 
         url = f"{self.get_api_url()}/tree"
-        headers = self.get_headers()
+        headers = await self.get_headers()
         client = self.get_client()
         try:
             response = await client.get(
@@ -273,7 +276,7 @@ class Runtime(ABC):
         """Wait for the server to respond to health checks at the given URL."""
         health_url = f"{self.get_api_url()}/health"
         logger.debug(f"⏳ Waiting for server at {health_url} to become healthy...")
-        headers = self.get_headers()
+        headers = await self.get_headers()
         client = self.get_client()
         try:
             response = await client.get(health_url, headers=headers, timeout=timeout)

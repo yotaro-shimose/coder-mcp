@@ -16,6 +16,7 @@ logger = logging.getLogger(__name__)
 _TOKEN_TTL_SECONDS = 55 * 60  # 55 minutes
 _cached_token: str | None = None
 _cached_token_time: float = 0.0
+_token_lock: asyncio.Lock | None = None
 
 
 async def fetch_id_token() -> str:
@@ -26,47 +27,61 @@ async def fetch_id_token() -> str:
     google.oauth2.id_token.fetch_id_token はサービスアカウントキーか
     メタデータサーバーが必要で、ローカルのユーザー認証情報では動かない。
     そのため gcloud auth print-identity-token を使う。
+
+    並列に呼ばれた場合、thundering herd を防ぐためキャッシュ miss 時のみ
+    Lock で直列化する(ダブルチェック方式)。
     """
-    global _cached_token, _cached_token_time
+    global _cached_token, _cached_token_time, _token_lock
+    # 高速パス: キャッシュヒットならロック取らない
     if _cached_token and (time.monotonic() - _cached_token_time) < _TOKEN_TTL_SECONDS:
         return _cached_token
 
-    max_attempts = 3
-    last_exception = None
+    if _token_lock is None:
+        _token_lock = asyncio.Lock()
 
-    for attempt in range(1, max_attempts + 1):
-        try:
-            proc = await asyncio.create_subprocess_exec(
-                "gcloud",
-                "auth",
-                "print-identity-token",
-                stdout=asyncio.subprocess.PIPE,
-                stderr=asyncio.subprocess.PIPE,
-            )
-            stdout, stderr = await proc.communicate()
-            if proc.returncode != 0:
-                raise RuntimeError(
-                    f"gcloud auth print-identity-token failed: {stderr.decode().strip()}"
+    async with _token_lock:
+        # ダブルチェック: ロック待ちしている間に別タスクが更新しているかも
+        if _cached_token and (time.monotonic() - _cached_token_time) < _TOKEN_TTL_SECONDS:
+            return _cached_token
+
+        max_attempts = 3
+        last_exception = None
+
+        for attempt in range(1, max_attempts + 1):
+            try:
+                proc = await asyncio.create_subprocess_exec(
+                    "gcloud",
+                    "auth",
+                    "print-identity-token",
+                    stdout=asyncio.subprocess.PIPE,
+                    stderr=asyncio.subprocess.PIPE,
                 )
-            token = stdout.decode().strip()
-            if not token:
-                raise RuntimeError("gcloud auth print-identity-token returned empty")
+                stdout, stderr = await proc.communicate()
+                if proc.returncode != 0:
+                    raise RuntimeError(
+                        f"gcloud auth print-identity-token failed: {stderr.decode().strip()}"
+                    )
+                token = stdout.decode().strip()
+                if not token:
+                    raise RuntimeError(
+                        "gcloud auth print-identity-token returned empty"
+                    )
 
-            _cached_token = token
-            _cached_token_time = time.monotonic()
-            return token
-        except Exception as e:
-            last_exception = e
-            if attempt < max_attempts:
-                logger.warning(
-                    f"Error fetching ID token (attempt {attempt}/{max_attempts}): {e}. "
-                    "Retrying in 1s..."
-                )
-                await asyncio.sleep(1)
+                _cached_token = token
+                _cached_token_time = time.monotonic()
+                return token
+            except Exception as e:
+                last_exception = e
+                if attempt < max_attempts:
+                    logger.warning(
+                        f"Error fetching ID token (attempt {attempt}/{max_attempts}): {e}. "
+                        "Retrying in 1s..."
+                    )
+                    await asyncio.sleep(1)
 
-    raise RuntimeError(
-        f"Failed to fetch ID token after {max_attempts} attempts: {last_exception}"
-    )
+        raise RuntimeError(
+            f"Failed to fetch ID token after {max_attempts} attempts: {last_exception}"
+        )
 
 
 class CloudRunRuntime(Runtime):
@@ -106,7 +121,6 @@ class CloudRunRuntime(Runtime):
             )
 
         self.service_url: str | None = None
-        self._id_token: str | None = None
         self._client = run_v2.ServicesClient()
 
     @property
@@ -168,10 +182,6 @@ class CloudRunRuntime(Runtime):
             raise RuntimeError("Cloud Run deploy returned None")
         return result
 
-    async def _fetch_id_token(self) -> str:
-        """Fetch ID token via gcloud CLI (cached for 55 min)."""
-        return await fetch_id_token()
-
     @override
     async def __aenter__(self) -> Self:
         logger.debug(
@@ -197,9 +207,9 @@ class CloudRunRuntime(Runtime):
             f"(revision: {deployed.latest_ready_revision})"
         )
 
-        # 2. Get ID token for authenticated requests
-        logger.debug("🔑 Fetching ID token...")
-        self._id_token = await self._fetch_id_token()
+        # 2. Prime the token cache for subsequent authenticated requests.
+        logger.debug("🔑 Priming ID token cache...")
+        await fetch_id_token()
 
         # 3. Wait for health endpoint (base class handles auth via get_headers)
         await self._wait_for_health()
@@ -224,7 +234,6 @@ class CloudRunRuntime(Runtime):
             except Exception as e:
                 logger.warning(f"Error deleting Cloud Run service: {e}")
             self.service_url = None
-            self._id_token = None
 
     @override
     def get_api_url(self) -> str:
@@ -233,8 +242,6 @@ class CloudRunRuntime(Runtime):
         return self.service_url
 
     @override
-    def get_headers(self) -> dict[str, str]:
-        headers: dict[str, str] = {}
-        if self._id_token:
-            headers["Authorization"] = f"Bearer {self._id_token}"
-        return headers
+    async def get_headers(self) -> dict[str, str]:
+        token = await fetch_id_token()
+        return {"Authorization": f"Bearer {token}"}
